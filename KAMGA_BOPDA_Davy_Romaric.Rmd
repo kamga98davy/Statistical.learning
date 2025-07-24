@@ -1,0 +1,172 @@
+---
+title: "Projet de Statistical Learning"
+author: "KAMGA BOPDA Davy Romaric"
+date: "2025-06-08"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    theme: flatly
+    toc_depth: 6
+    highlight: tango
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# **Introduction**
+
+Dans le cadre de ce projet, nous nous intéressons à la modélisation de la propension d'un client à souscrire une **assurance voyage** proposée par une agence de tourisme. L'objectif est de construire un modèle prédictif capable d'identifier les clients susceptibles d'accepter cette offre, en se basant sur leurs caractéristiques sociodémographiques, leur comportement de voyage et leur historique médical.
+
+La problématique se fonde sur un jeu de données accessible publiquement via la plateforme **Kaggle**. Il s'agit d'une base regroupant les données de **près de 2 000 clients** ayant été contactés en 2019 lors du lancement d'une nouvelle assurance voyage incluant une **couverture Covid**. L'entreprise souhaite désormais tirer parti de cet historique pour affiner ses actions marketing et cibler efficacement les futurs clients.
+
+La **target** (**TravelInsurance**) est binaire : elle indique si un client a souscrit (`1`) ou non (`0`) à l'assurance voyage proposée. Elle est donc modélisée à l'aide d'une **loi binomiale**, associée à une **fonction de lien logit**, conformément aux approches classiques en classification. Ce cadre est cohérent avec les méthodes d'arbres de classification comme **CART**, **Random Forests** et **Gradient Boosting**, qui seront testées et comparées dans ce projet.
+
+Les variables explicatives disponibles dans le jeu de données incluent notamment :
+
+  1. l'âge du client (**Age**),
+  2. son secteur d'activité(**Employment Type**),
+  3. son niveau d'études (diplômé universitaire ou non) (**GraduateOrNot**),
+  4. son revenu annuel (en roupies indiennes) (**AnnualIncome**),
+  5. la taille de son foyer familial (**FamilyMembers**),
+  6. la présence d'une maladie chronique (**ChronicDiseases**),
+  7. sa fréquence de voyage (voyageur fréquent ou non) (**FrequentFlyer**),
+  8. s'il a déjà voyagé à l'étranger (**EverTravelledAbroad**).
+
+Toutes ces informations sont susceptibles d'influencer la décision du client face à l'offre d'assurance, ce qui justifie leur intégration dans le modèle.
+
+L'analyse sera précédée d'une **analyse exploratoire des données**, principalement réalisée à l'aide du package `ggplot2`, afin de visualiser les relations entre la variable réponse et les covariables, détecter d'éventuelles anomalies et comprendre les structures de dépendance.
+
+Le choix du cadre binomial logit est soutenu par les références suivantes :
+
+* Frees, E. W. (2010). *Regression Modeling with Actuarial and Financial Applications*. Cambridge University Press.
+
+Ainsi, ce travail vise à sélectionner le **modèle d'arbre optimal** permettant une prédiction fiable de l'adhésion à l'assurance voyage, tout en garantissant une bonne capacité de généralisation.
+
+## **Importation des packages du projet**
+
+```{r cars}
+
+library(readr)
+library(ggplot2)
+library(scales)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(pdp) 
+library(gridExtra)
+library(pROC)
+library(rlang)
+library(dplyr)
+library(randomForest)
+library(ranger)
+library(gbm)
+library(reshape2)
+
+```
+
+## **Importation du fichier et prétraitement du jeu de données**
+
+```{r}
+base <- read_csv(
+  "C:/Users/LGC/Desktop/Cours actuariat/LACTU2310-Statistical learning/Projet/archive (2)/TravelInsurancePrediction.csv",
+  show_col_types = FALSE
+) |> 
+  select(-1)
+```
+
+On vérifie ici que la base a été correctement importée en affichant les premières lignes du jeu de données.
+
+```{r}
+head(base)
+```
+
+```{r}
+str(base)
+```
+
+Nous observons ici que notre jeu de données comprend **1987** individus et **9** variables indépendantes, avec des informations sur le type de chaque variable. Nous remarquons que la variable **ChronicDiseases** est numérique, mais doit être retraitée car elle est binaire : 1 indique la présence d'une maladie chronique, tandis que 0 indique son absence. De plus, la variable **FamilyMembers** est de type discret. La variable cible, **TravelInsurance**, est également numérique, mais est catégorique binaire ; nous veillerons à la recoder dans la section suivante.
+
+```{r}
+base$TravelInsurance <- ifelse(base$TravelInsurance == 1, "Yes", "No")
+base$ChronicDiseases <- ifelse(base$ChronicDiseases == 1, "Yes", "No")
+base$FamilyMembers <- factor(base$FamilyMembers)
+```
+
+## **Analyse des valeurs manquantes**
+
+```{r}
+colSums(is.na(base)) / nrow(base) * 100
+```
+
+Nous observons que les variables de notre jeu de données ne présentent aucune valeur manquante.
+
+# **Analyse descriptive**
+
+```{r}
+continuous_vars <- names(base)[sapply(base, is.numeric)]
+
+categorical_vars <- names(base)[sapply(base, function(x) is.character(x) || is.factor(x))]
+
+cat("Les variables categorielles sont : ",categorical_vars,"\n\n")
+cat("Les variables continues sont : ",continuous_vars,"\n")
+```
+
+## **Analyse univariée des variables continues**
+
+```{r}
+summary(base[continuous_vars])
+```
+
+Les résultats de cette analyse indiquent que 50 % des individus ont un âge supérieur à 29 ans (médiane = 29), et 75 % ont un âge inférieur à 32 ans. De plus, l'âge moyen est de 29,65 ans, avec le plus âgé ayant 35 ans et le plus jeune, 25 ans. Concernant la variable **AnnualIncome**, les analyses révèlent que 50 % des individus ont un revenu annuel inférieur à 900 000 roupies (médiane = 900 000), tandis que le revenu moyen s'élève à 932 763 roupies. Le revenu le plus élevé atteint 1 800 000 roupies.
+
+**NB : ** Les montants sont exprimés en roupies indiennes.
+
+## **Analyse univariée des variables catégorielles**
+
+```{r}
+plot_categorical_distribution <- function(data, variable) {
+  var_sym <- sym(variable)
+  
+  ggplot(data, aes(x = !!var_sym)) +
+    geom_bar(aes(y = ..count.. / sum(..count..)), fill = "steelblue") +
+    geom_text(stat = "count",
+              aes(label = scales::percent(..count.. / sum(..count..)),
+                  y = ..count.. / sum(..count..)),
+              vjust = -0.5) +
+    scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1.1)) +
+    labs(title = paste("Distribution de", variable),
+         x = variable,
+         y = "Pourcentage") +
+    theme_minimal()
+}
+```
+
+
+```{r}
+for (var in categorical_vars) {
+  print(plot_categorical_distribution(base, var))
+}
+```
+
+---
+
+- **Secteur d'emploi** :  71% des individus travaillent dans le **secteur privé** ou sont **travailleurs indépendants**, contre 29% employés par le **gouvernement**.
+
+- **Niveau d'études** :   85% des individus détiennent un **diplôme universitaire**, tandis que 15% n'en ont pas.
+
+- **Fréquence de voyage** :  79% **ne voyagent pas fréquemment**, contre 21% qui **voyagent régulièrement**.
+
+- **Voyage à l'étranger** :  81% n'ont **jamais voyagé à l'étranger**, tandis que 19% l'ont déjà fait.
+
+- **Maladies chroniques** :  72% des individus **ne souffrent d'aucune maladie chronique**, contre 28% atteints d'au moins une.
+
+- **Structure familiale** :  Les familles de **4 membres** sont les plus fréquentes (**25,42%**), suivies de près par celles de **5 membres** (**21,44%**). Ces deux groupes représentent **près de 47%** de l'échantillon.
+
+- **Souscription à l'assurance voyage** :  Seuls **36% des clients** ont **souscrit** à l'assurance voyage, tandis que **64%** ne l'ont **pas fait**, ce qui suggère que **près de 2 clients sur 3** refusent l'offre.
+
+---

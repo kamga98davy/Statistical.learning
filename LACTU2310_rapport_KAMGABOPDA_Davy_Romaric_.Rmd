@@ -1,0 +1,2394 @@
+---
+title: "Projet de Statistical Learning"
+author: "KAMGA BOPDA Davy Romaric"
+date: "2025-05-19"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    theme: flatly
+    toc_depth: 6
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# **Introduction**
+
+Dans le cadre de ce projet, nous nous intéressons à la modélisation de la propension d'un client à souscrire une **assurance voyage** proposée par une agence de tourisme. L'objectif est de construire un modèle prédictif capable d'identifier les clients susceptibles d'accepter cette offre, en se basant sur leurs caractéristiques sociodémographiques, leur comportement de voyage et leur historique médical.
+
+La problématique se fonde sur un jeu de données accessible publiquement via la plateforme **Kaggle**. Il s'agit d'une base regroupant les données de **près de 2 000 clients** ayant été contactés en 2019 lors du lancement d'une nouvelle assurance voyage incluant une **couverture Covid**. L'entreprise souhaite désormais tirer parti de cet historique pour affiner ses actions marketing et cibler efficacement les futurs clients.
+
+La **target** (**TravelInsurance**) est binaire : elle indique si un client a souscrit (1) ou non (0) à l'assurance voyage proposée. Elle est donc modélisée à l'aide d'une **loi binomiale**, associée à une **fonction de lien logit**, conformément aux approches classiques en classification. Ce cadre est cohérent avec les méthodes d'arbres de classification comme **CART**, **Random Forests** et **Gradient Boosting**, qui seront testées et comparées dans ce projet.
+
+Les variables explicatives disponibles dans le jeu de données incluent notamment :
+
+  1. l'âge du client (**Age**),
+  2. son secteur d'activité(**Employment Type**),
+  3. son niveau d'études (diplômé universitaire ou non) (**GraduateOrNot**),
+  4. son revenu annuel (en roupies indiennes) (**AnnualIncome**),
+  5. la taille de son foyer familial (**FamilyMembers**),
+  6. la présence d'une maladie chronique (**ChronicDiseases**),
+  7. sa fréquence de voyage (voyageur fréquent ou non) (**FrequentFlyer**),
+  8. s'il a déjà voyagé à l'étranger (**EverTravelledAbroad**).
+
+Toutes ces informations sont susceptibles d'influencer la décision du client face à l'offre d'assurance, ce qui justifie leur intégration dans le modèle.
+
+L'analyse sera précédée d'une **analyse exploratoire des données**, principalement réalisée à l'aide du package `ggplot2`, afin de visualiser les relations entre la variable réponse et les covariables, détecter d'éventuelles anomalies et comprendre les structures de dépendance.
+
+Le choix du cadre binomial logit est soutenu par les références suivantes :
+
+* Frees, E. W. (2010). *Regression Modeling with Actuarial and Financial Applications*. Cambridge University Press.
+
+Ainsi, ce travail vise à sélectionner le **modèle d'arbre optimal** permettant une prédiction fiable de l'adhésion à l'assurance voyage, tout en garantissant une bonne capacité de généralisation.
+
+## **Importation des packages du projet**
+
+```{r cars}
+library(readr)
+library(ggplot2)
+library(scales)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(pdp)
+library(gridExtra)
+library(pROC)
+library(rlang)
+library(dplyr)
+library(randomForest)
+library(ranger)
+library(gbm)
+library(reshape2)
+```
+
+## **Importation du fichier et prétraitement du jeu de données**
+
+```{r}
+base <- read_csv(
+  "C:/Users/LGC/Desktop/Cours actuariat/LACTU2310-Statistical learning/Projet/archive (2)/TravelInsurancePrediction.csv",
+  show_col_types = FALSE
+) |> 
+  select(-1)
+```
+
+On vérifie ici que la base a été correctement importée en affichant les premières lignes du jeu de données.
+
+```{r}
+head(base)
+```
+
+```{r}
+str(base)
+```
+
+Nous observons ici que notre jeu de données comprend **1987** individus et **9** variables indépendantes, avec des informations sur le type de chaque variable. Nous remarquons que la variable **ChronicDiseases** est numérique, mais doit être retraitée car elle est binaire : 1 indique la présence d'une maladie chronique, tandis que 0 indique son absence. De plus, la variable **FamilyMembers** est de type discret. La variable cible, **TravelInsurance**, est également numérique, mais est catégorique binaire ; nous veillerons à la recoder dans la section suivante.
+
+```{r}
+base$TravelInsurance <- ifelse(base$TravelInsurance == 1, "Yes", "No")
+base$ChronicDiseases <- ifelse(base$ChronicDiseases == 1, "Yes", "No")
+base$FamilyMembers <- factor(base$FamilyMembers)
+```
+
+## **Analyse des valeurs manquantes**
+
+```{r}
+colSums(is.na(base)) / nrow(base) * 100
+```
+
+Nous observons que les variables de notre jeu de données ne présentent aucune valeur manquante.
+
+# **Analyse descriptive**
+
+```{r}
+continuous_vars <- names(base)[sapply(base, is.numeric)]
+
+categorical_vars <- names(base)[sapply(base, function(x) is.character(x) || is.factor(x))]
+
+cat("Les variables categorielles sont : ",categorical_vars,"\n\n")
+cat("Les variables continues sont : ",continuous_vars,"\n")
+```
+
+## **Analyse univariée des variables continues**
+
+```{r}
+summary(base[continuous_vars])
+```
+
+Les résultats de cette analyse indiquent que 50 % des individus ont un âge supérieur à 29 ans (médiane = 29), et 75 % ont un âge inférieur à 32 ans. De plus, l'âge moyen est de 29,65 ans, avec le plus âgé ayant 35 ans et le plus jeune, 25 ans. Concernant la variable **AnnualIncome**, les analyses révèlent que 50 % des individus ont un revenu annuel inférieur à 900 000 roupies (médiane = 900 000), tandis que le revenu moyen s'élève à 932 763 roupies. Le revenu le plus élevé atteint 1 800 000 roupies.
+
+**NB : ** Les montants sont exprimés en roupies indiennes.
+
+## **Analyse univariée des variables catégorielles**
+
+```{r}
+plot_categorical_distribution <- function(data, variable) {
+  var_sym <- sym(variable)
+  
+  ggplot(data, aes(x = !!var_sym)) +
+    geom_bar(aes(y = ..count.. / sum(..count..)), fill = "steelblue") +
+    geom_text(stat = "count",
+              aes(label = scales::percent(..count.. / sum(..count..)),
+                  y = ..count.. / sum(..count..)),
+              vjust = -0.5) +
+    scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1.1)) +
+    labs(title = paste("Distribution de", variable),
+         x = variable,
+         y = "Pourcentage") +
+    theme_minimal()
+}
+```
+
+
+```{r}
+for (var in categorical_vars) {
+  print(plot_categorical_distribution(base, var))
+}
+```
+
+---
+
+- **Secteur d'emploi** :  71% des individus travaillent dans le **secteur privé** ou sont **travailleurs indépendants**, contre 29% employés par le **gouvernement**.
+
+- **Niveau d'études** :   85% des individus détiennent un **diplôme universitaire**, tandis que 15% n'en ont pas.
+
+- **Fréquence de voyage** :  79% **ne voyagent pas fréquemment**, contre 21% qui **voyagent régulièrement**.
+
+- **Voyage à l'étranger** :  81% n'ont **jamais voyagé à l'étranger**, tandis que 19% l'ont déjà fait.
+
+- **Maladies chroniques** :  72% des individus **ne souffrent d'aucune maladie chronique**, contre 28% atteints d'au moins une.
+
+- **Structure familiale** :  Les familles de **4 membres** sont les plus fréquentes (**25,42%**), suivies de près par celles de **5 membres** (**21,44%**). Ces deux groupes représentent **près de 47%** de l'échantillon.
+
+- **Souscription à l'assurance voyage** :  Seuls **36% des clients** ont **souscrit** à l'assurance voyage, tandis que **64%** ne l'ont **pas fait**, ce qui suggère que **près de 2 clients sur 3** refusent l'offre.
+
+---
+
+## **Analyse bi-variée**
+
+### **Croisement entre variables continues et la variable cible**
+
+```{r}
+boxplot_croisement <- function(data, variable) {
+  var_sym <- sym(variable)
+  
+  ggplot(data, aes(x = TravelInsurance, y = !!var_sym, fill = TravelInsurance)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot de", variable, "par rapport a TravelInsurance"),
+         x = "Propension a voyager ",
+         y = variable) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_fill_manual(values = c("blue", "green"))
+}
+```
+
+```{r}
+for (var in continuous_vars) {
+  print(boxplot_croisement(base, var))
+}
+```
+
+---
+
+Les résultats montrent que **l'âge** joue un rôle important dans la souscription à l'assurance voyage : les individus **plus âgés** semblent **davantage enclins à souscrire**, contrairement aux plus jeunes. Cela suggère une **corrélation positive** entre l'âge et la probabilité de souscription.
+
+Une tendance similaire est observée pour le **revenu annuel** : les personnes disposant de **revenus plus élevés** sont **significativement plus susceptibles** de souscrire à l'assurance voyage. Cette variable apparaît donc comme un **facteur discriminant majeur**.
+
+Par conséquent, **l'âge** et le **revenu annuel** devraient être **retenus comme prédicteurs clés** dans les modèles de classification (arbre de décision, random forest, bagging, gradient boosting) afin d'améliorer la **performance prédictive**.
+
+---
+
+### **Croisement entre variables catégorielles et la variable cible**
+
+```{r}
+categorical_vars <- setdiff(categorical_vars, "TravelInsurance")
+
+barplot_croisement <- function(data, var_cat) {
+  var_sym <- sym(var_cat)
+  
+  # Calcul des proportions
+  prop_df <- data %>%
+    group_by(!!var_sym, TravelInsurance) %>%
+    summarise(count = n(), .groups = "drop") %>%
+    group_by(!!var_sym) %>%
+    mutate(proportion = 100 * count / sum(count))
+  
+  # Création du barplot
+  ggplot(prop_df, aes(x = !!var_sym, y = proportion, fill = TravelInsurance)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_text(aes(label = paste0(round(proportion, 1), "%")),
+              position = position_dodge(width = 0.9),
+              vjust = -0.25, size = 3) +
+    scale_y_continuous(limits = c(0, 110), labels = function(x) paste0(x, "%")) +
+    labs(title = paste("Proportion de TravelInsurance selon", var_cat),
+         x = var_cat, y = "Proportion (%)", fill = "TravelInsurance") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+```
+
+```{r}
+categorical_vars <- setdiff(categorical_vars, "TravelInsurance")
+
+for (var in categorical_vars) {
+  print(barplot_croisement(base, var))
+}
+```
+
+L'analyse des graphiques croisant la variable cible `TravelInsurance` avec plusieurs variables catégorielles met en évidence des **différences de comportement significatives** selon les profils :
+
+* **Type d'emploi (`Employment Type`)**
+  Les individus du secteur privé ou indépendants sont **plus enclins à souscrire** (40,2%) que ceux du secteur public (24,6%).
+  → Le type d'emploi influence donc la décision de souscription.
+
+* **Niveau d'éducation (`GraduateOrNot`)**
+  Les diplômés sont **légèrement plus nombreux** à souscrire (36,1%) que les non-diplômés (33,6%).
+  → Effet modéré, mais non négligeable.
+
+* **Taille du foyer (`FamilyMembers`)**
+  Une **tendance croissante** est observée : plus la famille est grande, plus la souscription augmente.
+  Par exemple, 47,3% des familles de 9 membres souscrivent contre 29% pour les familles de 2.
+  → La **taille du ménage est un facteur explicatif intéressant**.
+
+* **Présence de maladie chronique (`ChronicDiseases`)**
+  Les individus atteints de maladies chroniques souscrivent **un peu plus souvent** (37,1%) que les autres (35,2%).
+  → Effet **léger mais cohérent** avec un besoin accru de sécurité.
+
+* **Fréquence de voyage (`FrequentFlyer`)**
+  Les voyageurs fréquents souscrivent **presque deux fois plus souvent** (57,3%) que les non-fréquents (30%).
+  → **Forte corrélation** avec le besoin d'assurance.
+
+* **Expérience de voyage à l'étranger (`EverTravelledAbroad`)**
+  Les individus ayant déjà voyagé à l'étranger affichent une **souscription massive de 78,4%**, contre seulement 25,6% pour les autres.
+  → C'est la **variable la plus discriminante**.
+
+---
+
+**Synthese**
+
+Les variables **`EverTravelledAbroad`**, **`FrequentFlyer`**, **`Employment Type`** et **`FamilyMembers`** se distinguent clairement par leur **pouvoir explicatif élevé**.
+Elles devraient être **retenues en priorité dans les modèles prédictifs** (arbre, random forest, bagging, boosting) pour améliorer la **précision de la prédiction de la souscription** à une assurance voyage.
+
+Les variables comme **`ChronicDiseases`** et **`GraduateOrNot`** présentent des effets **plus faibles mais potentiellement utiles** en complément.
+
+---
+
+## **Test de Khi2 entre variables catégorielles et la variable cible**
+
+```{r}
+# Test du Khi2 entre les variables categorielles et la target
+
+test_chi2_results <- function(data, categorical_vars, target = "TravelInsurance") {
+  # Vérifier si categorical_vars est vide
+  if (length(categorical_vars) == 0) {
+    warning("La liste des variables catégorielles est vide.")
+    return(data.frame())
+  }
+  
+  # Vérifier si target existe dans les données
+  if (!(target %in% names(data))) {
+    stop(paste("La variable cible", target, "n'existe pas dans les données."))
+  }
+  
+  # Initialiser le dataframe results
+  results <- data.frame(Variable = character(),
+                        p_value = numeric(),
+                        Association = character(),
+                        stringsAsFactors = FALSE)
+  
+  # Compteur pour le suivi
+  variables_traitees <- 0
+  
+  for (var in categorical_vars) {
+    # Vérifier si la variable existe
+    if (!(var %in% names(data))) {
+      warning(paste("La variable", var, "n'existe pas dans les données et sera ignorée."))
+      next
+    }
+    
+    # Créer le tableau de contingence
+    tbl <- table(data[[var]], data[[target]])
+    
+    # Vérification que le tableau de contingence est valide (dimensions > 1)
+    if (all(dim(tbl) > 1)) {
+      test <- chisq.test(tbl)
+      p_value <- test$p.value
+      association <- ifelse(p_value < 0.05, "Oui", "Non")
+      
+      results <- rbind(results, data.frame(
+        Variable = var,
+        p_value = round(p_value, 4),
+        Association = association
+      ))
+      
+      variables_traitees <- variables_traitees + 1
+    } else {
+      warning(paste("La variable", var, "ne permet pas de créer un tableau de contingence valide (au moins une dimension est 1)."))
+    }
+  }
+  
+  # Informer sur le nombre de variables traitées
+  message(paste("Nombre de variables ayant passé le test :", variables_traitees, "sur", length(categorical_vars)))
+  
+  return(results)
+}
+
+resultats_chi2 <- test_chi2_results(base, categorical_vars = categorical_vars, target = "TravelInsurance")
+print(resultats_chi2)
+```
+
+Les variables **statistiquement liées à la souscription** à une assurance voyage (c'est-à-dire ayant une p-value < 0.05 au test du Khi²) sont :
+
+  1. **Employment Type** 
+  2. **FamilyMembers** 
+  3. **FrequentFlyer**
+  4. **EverTravelledAbroad**
+
+Ces 4 variables présentent une association significative avec la variable cible `TravelInsurance` et peuvent donc être retenues pour la modélisation prédictive.
+
+## **Test de Kruskal-Wallis entre variables continues et la variable cible **
+
+```{r}
+test_kruskal_table <- function(df, continuous_vars, target = "TravelInsurance") {
+  
+  results <- data.frame(
+    Variable = character(),
+    p_value = numeric(),
+    Décision = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  for (num_var in continuous_vars) {
+    
+    data_clean <- df[!is.na(df[[num_var]]) & !is.na(df[[target]]), c(num_var, target)]
+    
+    groupes <- split(data_clean[[num_var]], data_clean[[target]])
+    
+    # Vérification : au moins 2 groupes valides avec au moins 10 obs
+    
+    group_sizes <- sapply(groupes, length)
+    
+    if (length(groupes) < 2) {
+      p_value <- NA
+      decision <- "Moins de 2 groupes valides"
+      
+    } else if (any(group_sizes < 10)) {
+      p_value <- NA
+      decision <- "Échantillon trop petit"
+      
+    } else {
+      test <- kruskal.test(data_clean[[num_var]] ~ data_clean[[target]])
+      p_value <- test$p.value
+      decision <- ifelse(p_value < 0.05, "Significatif", "Pas Significatif")
+    }
+    
+    results <- rbind(results, data.frame(
+      Variable = num_var,
+      p_value = p_value,
+      Decision = decision,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  return(results)
+}
+
+test_kruskal_table(base, continuous_vars, target = "TravelInsurance")
+```
+
+---
+
+**Interprétation**
+
+Le **test de Kruskal-Wallis**, test non paramétrique, permet d'évaluer si la distribution d'une variable continue varie de manière significative selon les modalités d'une variable catégorielle. Dans notre cas, il permet de tester si certaines caractéristiques quantitatives diffèrent selon que les individus ont souscrit ou non à une assurance voyage (`TravelInsurance`, avec modalités "Yes" et "No").
+
+**Âge :**
+
+* La p-value obtenue est d'environ **0.0307**, ce qui est inférieure au seuil de 5 %. On conclut donc à un **effet significatif**.
+* Cela signifie que **la distribution de l'âge (notamment la médiane)** diffère de manière significative entre les deux groupes.
+* Cette observation confirme nos analyses descriptives : **les clients plus âgées souscrivent plus fréquemment à une assurance voyage** que les plus jeunes.
+
+**Revenu annuel (AnnualIncome) :**
+
+* La p-value est extrêmement faible (**3.02e-70**), ce qui indique une **très forte significativité statistique**.
+* Il existe donc une **différence marquée de revenu annuel** entre les souscripteurs et les non-souscripteurs.
+* Ce résultat suggère que **le revenu est un déterminant majeur dans la décision de souscription** : les clients disposant d'un revenu plus élevé sont **nettement plus enclins à souscrire** une assurance voyage.
+
+---
+
+# **Comparaison des méthodes d'arbres**
+
+Dans cette section, nous mettons en œuvre les techniques de modélisation ensemblistes étudiées en cours, conformément aux orientations définies dans le cadre du projet.
+
+## **Regression Trees et Pruning**
+
+### **Construction de l'arbre**
+
+1. **Nettoyage des données** : Le nom de la variable `Employment Type` a été standardisé en `Employment_Type` pour éviter les erreurs de traitement et assurer la cohérence des noms de colonnes.
+  
+2. **Séparation des données** :  Le jeu de données a été divisé en deux parties : 80% pour entraîner les modèles, 20% pour les tester. Cela garantit une évaluation réaliste de la performance du modèle sur des données nouvelles.
+  
+3. **Formatage de la variable cible** : La variable `TravelInsurance` (souscription à l'assurance) a été convertie en **facteur** pour qu'elle soit bien interprétée comme une variable catégorielle dans les modèles de classification.
+  
+4. **Construction du modèle d'arbre de décision** : Un **arbre de décision** a été construit pour prédire la souscription à partir des caractéristiques du client. Des contraintes comme la profondeur maximale et la taille minimale des nœuds ont été fixées pour éviter le surapprentissage.
+
+
+```{r}
+# Partition de la base en Train et en  Test
+
+set.seed(123)
+
+col_index <- which(names(base) == "Employment Type")
+
+names(base)[col_index] <- "Employment_Type"
+
+in_training <- as.vector(createDataPartition(y = base$TravelInsurance, times = 1, p = 0.8, list = FALSE))
+
+training_set <- base[in_training, ]
+
+testing_set <- base[-in_training, ]
+```
+
+
+```{r}
+training_set$TravelInsurance <- factor(training_set$TravelInsurance, levels = c("No", "Yes"))
+
+testing_set$TravelInsurance <- factor(testing_set$TravelInsurance, levels = c("No", "Yes"))
+```
+
+
+```{r}
+#----------------------------------------------------
+# Construction du modèle complet
+#----------------------------------------------------
+
+# Arbre avec toutes les variables sans prunning
+
+set.seed(123)
+
+m1_rpart <- rpart(TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad, 
+                  data = training_set, 
+                  method = "class", 
+                  control = rpart.control(cp = 0,
+                                          xval = 10, 
+                                          maxdepth = 7,
+                                          minbucket = 5))
+```
+
+```{r}
+#----------------------------------------------------
+# Analyse du paramètre de complexité (CP)
+#----------------------------------------------------
+
+# Afficher la table du paramètre de complexité
+
+printcp(m1_rpart)
+```
+
+```{r grah1, echo=FALSE, fig.cap="Variation des cps", fig.align='center'} 
+# Visualiser graphiquement le paramètre de complexité
+
+plotcp(x = m1_rpart, minline = TRUE, col = "red")
+```
+
+---
+
+L'erreur minimale est obtenue autour de **cp ≈ 0.0022**, pour un arbre de taille 11.
+ 
+Cependant, selon la règle du 1-SE (ligne rouge), on peut choisir un arbre plus petit (cp ≈ 0.053) avec seulement 2 feuilles, car son erreur est dans la marge d'erreur acceptable.
+
+---
+
+### **Mise en place d'une procédure de pruning afin d'éviter le sur-apprentissage.**
+
+Dans cette section,on identifie le paramètre de complexité (cp) minimisant l'erreur de validation croisée et trace la règle du 1SE pour sélectionner un arbre plus simple mais performant. Le graphique affiche l'évolution de l'erreur en fonction de log(CP), avec une ligne rouge marquant le seuil 1SE.
+
+```{r}
+SE <- m1_rpart$cptable[which.min(m1_rpart$cptable[, 4]), 5]
+min_error <- m1_rpart$cptable[which.min(m1_rpart$cptable[, 4]), 4]
+boundary <- min_error + SE
+
+# Graphique de l'erreur de validation croisée et limite 1SE
+ggplot() + 
+  geom_line(aes(x = log(m1_rpart$cptable[, 1]), y = m1_rpart$cptable[, 4])) +
+  geom_point(aes(x = log(m1_rpart$cptable[, 1]), y = m1_rpart$cptable[, 4])) +
+  geom_hline(aes(yintercept = boundary), color = "red") +
+  scale_x_continuous(name = "log(CP)") + 
+  scale_y_continuous(name = "xerror") + 
+  theme_bw() +
+  labs(title = "Erreur de validation croisee en fonction du parametre de complexite",
+       subtitle = "La ligne rouge represente la regle 1SE")
+
+# Extraction du cp optimal selon le minimum d'erreur
+
+cp_min <- m1_rpart$cptable[which.min(m1_rpart$cptable[, 4]), 1]
+
+print(cp_min)
+```
+
+```{r}
+cp_star <- cp_min
+
+# Grille autour de cp_star
+
+grid <- expand.grid(cp = seq(cp_star / 2, cp_star * 2, length.out = 20))
+
+# Contrôle de validation croisée pour classification
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+  summaryFunction = defaultSummary,
+  classProbs = TRUE,
+  verboseIter = TRUE
+)
+
+# Modèle avec CV en minimisant l'erreur (1 - Accuracy)
+set.seed(123)
+cv_model <- train(
+  TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+  data = training_set,
+  method = "rpart",
+  trControl = ctrl,
+  tuneGrid = grid,
+  metric = "Accuracy" 
+)
+
+print(cv_model)
+
+# Extraire le meilleur CP
+best_cp <- cv_model$bestTune$cp
+cat("Meilleur CP (minimisant l'erreur de validation croisee):", best_cp, "\n")
+
+# Tracer Accuracy vs CP
+ggplot(cv_model$results, aes(x = cp, y = Accuracy)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Accuracy en fonction du parametre de complexite (cp)",
+    x = "Parametre de complexite (cp)",
+    y = "Exactitude moyenne (10-fold CV)"
+  )
+```
+
+```{r}
+ggplot(cv_model$results, aes(x = cp, y = 1 - Accuracy)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Erreur de validation croisee en fonction de cp",
+    x = "Parametre de complexite (cp)",
+    y = "Erreur moyenne (1 - accuracy)"
+  )
+```
+
+Nous avons sélectionné le paramètre de complexité optimal (cp) issu du modèle d'arbre complet, puis nous avons varié le cp entre sa moitié et son double pour affiner davantage notre choix. Ensuite, nous avons réalisé un modèle de validation croisée dont les résultats montrent que :
+
+Le premier graphique présente l'exactitude moyenne (précision) en fonction du même paramètre cp. La courbe augmente jusqu'à atteindre un plateau, confirmant que l'exactitude progresse avec la complexité de l'arbre avant de se stabiliser. Ce graphique renforce le précédent en soulignant que le choix optimal de cp maximise la performance du modèle sans entraîner de surapprentissage.
+
+Le deuxième graphique illustre l'évolution de l'erreur moyenne de validation croisée (1 - précision) en fonction du paramètre cp utilisé dans l'arbre de décision. On constate que l'erreur diminue avec l'augmentation de cp, atteignant une valeur minimale aux alentours de cp ≈ 0,006, après quoi elle se stabilise. Cela suggère que des arbres légèrement plus complexes améliorent la performance prédictive jusqu'à un certain seuil.
+
+### **Construction de l'arbre optimal**
+
+```{r}
+# Construction de l'arbre optimal avec le CP trouvé
+
+arbre_optimal <- rpart(
+  TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+  data = training_set,
+  method = "class",
+  control = rpart.control(cp = best_cp)
+)
+```
+
+```{r}
+rpart.plot(arbre_optimal, 
+           type = 5, 
+           extra = 104,  # Afficher les pourcentages et nombres
+           box.palette = "RdBu",
+           fallen.leaves = TRUE,
+           under = FALSE,
+           digits = 3, 
+           cex = 0.75,
+           shadow.col = "gray",
+           main = "Arbre de decision optimal pour TravelInsurance")
+```
+
+---
+
+**Interprétation de l'arbre de décision optimal**
+
+L'arbre de décision optimal obtenu (avec le meilleur paramètre de complexité `cp`) repose uniquement sur la variable **AnnualIncome** pour prédire la souscription à une assurance voyage.
+
+* Si le **revenu annuel est inférieur à 1.32 million**, alors l'arbre prédit **"No"** (non-souscription), avec une **probabilité de 75.6 %** parmi ces individus (soit 756 sur 1000). Ce groupe représente **83.2 %** de l'échantillon total.
+* Si le **revenu annuel est supérieur ou égal à 1.32 million**, alors l'arbre prédit **"Yes"** (souscription), avec une **probabilité de 91.8 %** (82 individus sur 90 dans ce groupe).
+
+La variable `AnnualIncome` s'impose comme le meilleur discriminant pour prédire la souscription. Elle suffit à elle seule à séparer efficacement les clients en deux groupes distincts, révélant un effet fort du revenu sur la décision de souscription.
+
+---
+
+### **Importance des variables issues de l'arbre optimal.**
+
+Ici, nous allons présentons les graphiques donnant l'importance des variables du modele d'arbre de décision.
+
+```{r}
+# Création d'un data frame avec l'importance des variables
+var_importance <- data.frame(
+  Variable = names(arbre_optimal$variable.importance),
+  Importance = arbre_optimal$variable.importance
+)
+
+ggplot(var_importance, aes(x = reorder(Variable, Importance), y = Importance)) + 
+  geom_bar(stat = 'identity', fill = "blue") +
+  geom_text(aes(label = round(Importance, 2)), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(
+    title = "Importance des variables pour la prediction de TravelInsurance",
+    x = "Variable",
+    y = "Importance relative"
+  ) +
+  theme_bw()
+```
+
+Ce graphique montre l'**importance relative des variables** dans l'arbre de décision construit pour prédire la souscription à une assurance voyage (`TravelInsurance`).
+
+**AnnualIncome** est de loin la variable la plus influente, avec une importance relative de **201**, ce qui signifie qu'elle est fortement utilisée dans les critères de séparation de l'arbre. Elle constitue **le facteur principal de décision** dans la classification.
+
+**EverTravelledAbroad** arrive en deuxième position, avec une importance de **110.2**. Cette variable joue également un rôle significatif, probablement pour affiner la prédiction une fois un certain revenu atteint.
+
+**Age**, avec une importance beaucoup plus faible (**14.34**), a un effet marginal dans l'arbre actuel. Elle peut intervenir dans quelques feuilles profondes mais **n'est pas discriminante au niveau global**.
+
+**Conclusion : ** L'algorithme a principalement retenu **le revenu annuel** et **l'expérience de voyage à l'étranger** comme indicateurs majeurs pour prédire la souscription. Cela **confirme et complète visuellement** les résultats issus des statistiques descriptives et du test de Khi2.
+
+
+### **Graphique de dépendance des variables importantes.** 
+
+#### **Cas des variables continues de forte importance**
+
+Dans cette section, nous allons afficher les graphiques montrant les dépendances des variables importantes.
+
+```{r arbre, echo=FALSE, fig.cap="Graphique de dépendance", fig.align='center'}
+
+var_importance <- data.frame(
+  var = names(arbre_optimal$variable.importance),
+  importance = as.numeric(arbre_optimal$variable.importance)
+)
+
+top_vars <- var_importance$var[order(var_importance$importance, decreasing = TRUE)][1:3]
+
+pdp_continuous <- function(model, var_name, data) {
+
+  if (is.numeric(data[[var_name]])) {
+    values <- seq(min(data[[var_name]], na.rm = TRUE), 
+                  max(data[[var_name]], na.rm = TRUE), 
+                  length.out = 30)
+  } else {
+    values <- sort(unique(data[[var_name]]))
+  }
+  
+  # Créer un data frame pour stocker les résultats
+  pdp_result <- data.frame(
+    variable = values,
+    effect = numeric(length(values))
+  )
+  names(pdp_result)[1] <- var_name
+  
+  # Pour chaque valeur, calculer l'effet moyen
+  
+  for (i in seq_along(values)) {
+    
+    temp_data <- data
+    temp_data[[var_name]] <- values[i]
+    
+    # Prédire et calculer la moyenne des probabilités pour la classe positive
+    pred <- predict(model, temp_data, type = "prob")[, 2]
+    pdp_result$effect[i] <- mean(pred, na.rm = TRUE)
+  }
+  
+  return(pdp_result)
+}
+
+# PDP pour les variables continues importantes
+
+pdp_plots <- list()
+for (var in intersect(top_vars, continuous_vars)) {
+  # Générer les données du PDP
+  pdp_data <- pdp_continuous(arbre_optimal, var, training_set)
+  
+  # Créer le graphique
+  p <- ggplot(pdp_data, aes(x = .data[[var]], y = effect))  +
+    geom_smooth(method = "loess", se = TRUE, color = "red", linetype = "dashed", size = 0.8) +
+    theme_minimal() +
+    labs(title = paste("Partial Dependence Plot pour", var),
+         y = "Effet partiel sur la probabilite d'assurance voyage",
+         x = var)
+  
+  pdp_plots[[var]] <- p
+}
+
+if (length(intersect(top_vars, continuous_vars)) > 0) {
+  if (requireNamespace("gridExtra", quietly = TRUE)) {
+    do.call(gridExtra::grid.arrange, 
+            c(pdp_plots[intersect(top_vars, continuous_vars)], 
+              list(ncol = min(2, length(intersect(top_vars, continuous_vars))))))
+  } else {
+    # Si gridExtra n'est pas disponible, afficher les graphiques un par un
+    for (var in intersect(top_vars, continuous_vars)) {
+      print(pdp_plots[[var]])
+    }
+  }
+}
+```
+
+---
+
+**Interprétation des Partial Dependence Plots (PDP)**
+
+- **AnnualIncome**
+
+Le PDP montre que la probabilité de souscrire à une assurance voyage augmente fortement avec le **revenu annuel**.
+
+* Lorsque le revenu annuel est **inférieur à environ 1 million**, l'effet partiel est faible et relativement stable (autour de 30 % de probabilité).
+* Une **forte croissance** de la probabilité est observée entre **1 million et 1,3 million**, indiquant un **seuil de revenu** au-delà duquel les clients deviennent beaucoup plus susceptibles de souscrire à l'assurance.
+* À partir de **1,5 million**, la probabilité de souscription dépasse **90 %**, montrant un effet très marqué du revenu élevé.
+
+**Conclusion** : Le revenu annuel est un **facteur déterminant** dans la décision de souscription à une assurance voyage.
+
+- **Age**
+
+Le PDP de l'âge montre une **courbe plate**, indiquant que :
+
+* La **probabilité de souscription** reste **stable** quel que soit l'âge des individus dans l'échantillon.
+* Il n'y a **aucune variation notable** de l'effet de l'âge sur la prédiction du modèle.
+
+ **Conclusion** : Une fois la variable revenu intégrée dans le modèle d'arbre, l'âge n'apporte plus d'information prédictive significative supplémentaire concernant la souscription à l'assurance.
+
+---
+
+#### **Cas des variables catégorielles de forte importance **
+
+```{r}
+# PDP pour les variables catégorielles
+
+pdp_categorical <- function(model, var_name, data) {
+  # Obtenir les niveaux uniques de la variable
+  values <- sort(unique(data[[var_name]]))
+  
+  # Créer un data frame pour stocker les résultats
+  pdp_result <- data.frame(
+    variable = values,
+    effect = numeric(length(values))
+  )
+  names(pdp_result)[1] <- var_name
+  
+  # Pour chaque valeur, calculer l'effet moyen
+  for (i in seq_along(values)) {
+    # Créer une copie des données où la variable est fixée à la valeur actuelle
+    temp_data <- data
+    temp_data[[var_name]] <- values[i]
+    
+    # Prédire et calculer la moyenne des probabilités pour la classe positive
+    pred <- predict(model, temp_data, type = "prob")[, 2]
+    pdp_result$effect[i] <- mean(pred, na.rm = TRUE)
+  }
+  
+  return(pdp_result)
+}
+
+# Identifier quelles variables catégorielles sont parmi les plus importantes
+cat_top_vars <- intersect(top_vars, categorical_vars)
+cat("Variables catégorielles importantes:", paste(cat_top_vars, collapse=", "), "\n")
+
+# Créer un graphique pour chaque variable catégorielle importante
+cat_pdp_plots <- list()
+if (length(cat_top_vars) > 0) {
+  for (i in 1:length(cat_top_vars)) {
+    var <- cat_top_vars[i]
+    # Générer les données du PDP
+    pdp_data <- pdp_categorical(arbre_optimal, var, training_set)
+    
+    # Créer le graphique
+    p <- ggplot(pdp_data, aes_string(x = var, y = "effect")) +
+      geom_bar(stat = "identity", fill = "steelblue") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(title = paste("Partial Dependence Plot pour", var),
+           y = "Effet partiel sur la probabilite d'assurance voyage",
+           x = var)
+    
+    # Stocker le graphique
+    cat_pdp_plots[[i]] <- p
+  }
+  
+  # Afficher tous les graphiques
+  if (requireNamespace("gridExtra", quietly = TRUE)) {
+    gridExtra::grid.arrange(
+      grobs = cat_pdp_plots,
+      ncol = min(2, length(cat_top_vars))
+    )
+  } else {
+    # Si gridExtra n'est pas disponible, afficher les graphiques un par un
+    for (p in cat_pdp_plots) {
+      print(p)
+    }
+  }
+} else {
+  cat("Aucune variable catégorielle trouvée parmi les plus importantes.\n")
+}
+
+# Version ultra-simplifiée pour afficher les PDP des variables catégorielles
+cat_top_vars <- intersect(top_vars, categorical_vars)
+cat("Variables catégorielles importantes:", paste(cat_top_vars, collapse=", "), "\n")
+
+for (var in cat_top_vars) {
+  # Générer les données du PDP
+  pdp_data <- pdp_categorical(arbre_optimal, var, training_set)
+  
+  # Créer et afficher le graphique directement
+  p <- ggplot(pdp_data, aes_string(x = var, y = "effect")) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = paste("Partial Dependence Plot pour", var),
+         y = "Effet partiel sur la probabilite d'assurance voyage",
+         x = var)
+  
+  print(p)
+}
+```
+
+---
+
+Ce graphique représente un **diagramme de dépendance partielle (Partial Dependence Plot, PDP)** pour la variable **catégorielle `EverTravelledAbroad`**, qui indique si un individu a déjà voyagé à l'étranger ou non.
+
+Les deux barres sont **presque identiques**, ce qui signifie que la variable `EverTravelledAbroad` **n'a pas un impact significatif** sur la prédiction du modèle.
+
+Que la personne ait **déjà voyagé à l'étranger** ou non **n'influence presque pas** la probabilité prédite de souscrire à une assurance voyage, **selon le modèle**.
+
+---
+
+### **Evaluation du modele d'arbre sur les données test**
+
+```{r}
+# Prédictions
+pred_train <- predict(arbre_optimal, training_set, type = "class")
+pred_test <- predict(arbre_optimal, testing_set, type = "class")
+
+# Probabilités pour courbe ROC
+pred_train_prob <- predict(arbre_optimal, training_set, type = "prob")[, 2]
+pred_test_prob <- predict(arbre_optimal, testing_set, type = "prob")[, 2]
+
+# Courbes ROC
+roc_train <- roc(training_set$TravelInsurance, pred_train_prob)
+roc_test <- roc(testing_set$TravelInsurance, pred_test_prob)
+
+roc_train_df <- data.frame(
+  Specificity = 1 - roc_train$specificities,
+  Sensitivity = roc_train$sensitivities,
+  Dataset = "Train"
+)
+
+roc_test_df <- data.frame(
+  Specificity = 1 - roc_test$specificities,
+  Sensitivity = roc_test$sensitivities,
+  Dataset = "Test"
+)
+
+roc_df <- rbind(roc_train_df, roc_test_df)
+
+ggplot(roc_df, aes(x = Specificity, y = Sensitivity, color = Dataset)) +
+  geom_line(size = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+  scale_color_manual(values = c("Train" = "blue", "Test" = "red")) +
+  theme_minimal() +
+  labs(title = "Courbes ROC (Train vs Test)",
+       subtitle = paste("AUC Train =", round(auc(roc_train), 3), 
+                        ", AUC Test =", round(auc(roc_test), 3)),
+       x = "Taux de faux positifs (1 - Specificite)",
+       y = "Taux de vrais positifs (Sensibilite)") +
+  theme(legend.position = "bottom")
+```
+
+## **Méthodes d'Ensemble : Bagging**
+
+### **Mise en œuvre du bagging avec des arbres de décision**
+
+Dans notre étude, nous avons mis en œuvre la méthode de bagging (Bootstrap Aggregating) en combinant plusieurs **arbres de décision** construits sur des échantillons bootstrap. Cette technique vise à **réduire la variance** d'un modèle unique et à obtenir des prédictions plus stables.
+
+Pour cela, nous avons généré **50 sous-échantillons bootstrap** à partir des données d'apprentissage. Sur chacun de ces échantillons, un arbre de décision a été entraîné selon une formule de classification utilisant les variables explicatives disponibles.
+
+Chaque arbre a été construit avec un **paramètre de complexité $cp$ optimisé** (issu de la méthode d'arbre) afin d'éviter les arbres trop complexes ou trop simples. L'ensemble des modèles est ensuite utilisé pour prédire via **vote majoritaire** (ou moyenne de probabilité dans une version probabiliste).
+
+Ce procédé permet de renforcer la **généralisation du modèle**, en lissant les erreurs spécifiques à un échantillon particulier.
+
+```{r}
+set.seed(123)
+
+bootstrap_samples <- createResample(training_set$TravelInsurance, times = 50)
+
+bagg_cart <- lapply(bootstrap_samples, function(X) {
+  rpart(TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+          GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad, 
+        data = training_set[X, ], 
+        method = "class", 
+        control = rpart.control(cp = best_cp,
+                                xval = 5))
+})
+```
+
+### **Performance du modèle (par validation croisée) et la réduction de la variance en fonction du nombre d'arbres ntrees**
+
+Pour évaluer comment la performance et la variance évoluent en fonction du nombre d'arbres, nous allons créer des modèles avec différents nombres d'arbres et mesurer leurs performances.
+
+```{r}
+# Vérifier s'il y a des conflits de noms avec des fonctions R
+
+problematic_names <- c()
+for (col_name in colnames(training_set)) {
+  if (exists(col_name, mode = "function")) {
+    problematic_names <- c(problematic_names, col_name)
+  }
+}
+
+if (length(problematic_names) > 0) {
+  cat("\nATTENTION: Colonnes avec des noms conflictuels:\n")
+  print(problematic_names)
+}
+
+# ===============================================
+# SOLUTION ROBUSTE AVEC ISOLATION DES VARIABLES
+# ===============================================
+
+
+# Fonction pour nettoyer les noms de colonnes
+
+clean_column_names <- function(df) {
+  # Supprimer les espaces et caractères spéciaux
+  clean_names <- make.names(colnames(df), unique = TRUE)
+  colnames(df) <- clean_names
+  return(df)
+}
+
+# Nettoyer les datasets
+
+training_set_clean <- clean_column_names(training_set)
+testing_set_clean <- clean_column_names(testing_set)
+
+
+# Paramètres
+ntrees_values <- c(1, 2,3,5,8,10, 12,15, 20,25, 30,35, 40, 50,60, 75,80,90, 100, 150, 200, 250, 300)
+n_samples <- 100
+set.seed(123)
+
+# Initialisation des résultats
+performance_results <- data.frame(
+  ntrees = ntrees_values,
+  accuracy = numeric(length(ntrees_values)),
+  auc = numeric(length(ntrees_values)),
+  variance = numeric(length(ntrees_values))
+)
+
+# Stockage des prédictions avec isolation de l'environnement
+all_tree_preds <- vector("list", n_samples)
+successful_trees <- 0
+
+cat("\n=== CONSTRUCTION DES ARBRES ===\n")
+
+# Création d'un environnement isolé pour éviter les conflits
+
+isolated_env <- new.env()
+
+# Fonction personnalisée pour calculer la variance sans conflit
+
+safe_variance <- function(x) {
+  if (length(x) <= 1) return(0)
+  n <- length(x)
+  mean_x <- sum(x) / n
+  sum((x - mean_x)^2) / (n - 1)
+}
+
+for (i in 1:n_samples) {
+  tryCatch({
+    # Bootstrap avec environnement isolé
+    boot_indices <- sample(nrow(training_set_clean), replace = TRUE)
+    train_boot <- training_set_clean[boot_indices, ]
+    
+    # Vérifier la diversité des classes
+    class_counts <- table(train_boot$TravelInsurance)
+    if (length(class_counts) < 2 || min(class_counts) < 3) {
+      next
+    }
+    
+    predictor_vars <- setdiff(colnames(train_boot), "TravelInsurance")
+    formula_string <- paste("TravelInsurance ~", paste(predictor_vars, collapse = " + "))
+    tree_formula <- as.formula(formula_string)
+    
+    # Utiliser l'environnement isolé pour la construction
+    tree_model <- eval(
+      expr = rpart(
+        formula = tree_formula,
+        data = train_boot,
+        method = "class",
+        control = rpart.control(
+          cp = 0.01,
+          minsplit = 10,
+          minbucket = 3,
+          maxdepth = 10,
+          xval = 0
+        )
+      ),
+      envir = isolated_env
+    )
+    
+    # Vérifier que l'arbre est valide
+    if (!is.null(tree_model) && length(unique(predict(tree_model, train_boot, type = "class"))) > 1) {
+      
+      # Prédictions avec gestion robuste
+      pred_result <- predict(tree_model, testing_set_clean, type = "prob")
+      
+      if (is.matrix(pred_result) && ncol(pred_result) >= 2) {
+        # Déterminer la colonne de la classe positive
+        target_levels <- levels(testing_set_clean$TravelInsurance)
+        positive_class <- target_levels[length(target_levels)] 
+        
+        if (positive_class %in% colnames(pred_result)) {
+          prob_positive <- pred_result[, positive_class]
+        } else {
+          prob_positive <- pred_result[, ncol(pred_result)]  # Dernière colonne
+        }
+        
+        # Vérifier que les probabilités sont valides
+        if (all(is.finite(prob_positive)) && all(prob_positive >= 0 & prob_positive <= 1)) {
+          all_tree_preds[[i]] <- prob_positive
+          successful_trees <- successful_trees + 1
+        }
+      }
+    }
+    
+  }, error = function(e) {
+    cat("Erreur à l'arbre", i, ":", e$message, "\n")
+  })
+  
+  # Affichage du progrès
+  if (i %% 25 == 0) {
+    cat("Progres:", i, "/", n_samples, "- Arbres réussis:", successful_trees, "\n")
+  }
+}
+
+cat("Arbres construits avec succes:", successful_trees, "/", n_samples, "\n")
+
+# Filtrer et convertir les prédictions
+valid_preds <- all_tree_preds[!sapply(all_tree_preds, is.null)]
+
+if (length(valid_preds) == 0) {
+  stop("Aucun arbre n'a pu être construit. Probleme avec les donnees.")
+}
+
+# Conversion en matrice avec gestion d'erreur
+pred_matrix <- tryCatch({
+  do.call(cbind, valid_preds)
+}, error = function(e) {
+  cat("Erreur lors de la conversion en matrice:", e$message, "\n")
+  return(NULL)
+})
+
+if (is.null(pred_matrix)) {
+  stop("Impossible de creer la matrice de predictions")
+}
+
+cat("Matrice créée:", nrow(pred_matrix), "x", ncol(pred_matrix), "\n")
+
+# ===============================================
+# ÉVALUATION AVEC FONCTIONS SÛRES
+# ===============================================
+
+cat("\n=== EVALUATION DES PERFORMANCES ===\n")
+
+for (i in seq_along(ntrees_values)) {
+  ntrees_current <- min(ntrees_values[i], ncol(pred_matrix))
+  
+  if (ntrees_current > 0) {
+    tryCatch({
+      # Calcul des prédictions moyennes
+      if (ntrees_current == 1) {
+        ensemble_probs <- pred_matrix[, 1]
+      } else {
+        ensemble_probs <- rowMeans(pred_matrix[, 1:ntrees_current, drop = FALSE])
+      }
+      
+      # Classification
+      target_levels <- levels(testing_set_clean$TravelInsurance)
+      positive_class <- target_levels[length(target_levels)]
+      negative_class <- target_levels[1]
+      
+      ensemble_classes <- factor(
+        ifelse(ensemble_probs > 0.5, positive_class, negative_class),
+        levels = target_levels
+      )
+      
+      # Calcul de l'accuracy avec gestion d'erreur
+      performance_results$accuracy[i] <- mean(ensemble_classes == testing_set_clean$TravelInsurance, na.rm = TRUE)
+      
+      # Calcul de l'AUC avec gestion d'erreur
+      tryCatch({
+        roc_obj <- roc(testing_set_clean$TravelInsurance, ensemble_probs, quiet = TRUE)
+        performance_results$auc[i] <- as.numeric(auc(roc_obj))
+      }, error = function(e) {
+        performance_results$auc[i] <<- NA
+      })
+      
+      # Calcul de la variance avec fonction sûre
+      if (ntrees_current > 1) {
+        variances <- numeric(nrow(pred_matrix))
+        for (j in 1:nrow(pred_matrix)) {
+          variances[j] <- safe_variance(pred_matrix[j, 1:ntrees_current])
+        }
+        performance_results$variance[i] <- mean(variances, na.rm = TRUE)
+      }
+      
+    }, error = function(e) {
+      cat("Erreur pour ntrees =", ntrees_values[i], ":", e$message, "\n")
+    })
+  }
+}
+
+# Nettoyage des résultats
+performance_results <- performance_results[!is.na(performance_results$accuracy), ]
+
+# Affichage des résultats
+cat("\n=== RESULTATS FINAUX ===\n")
+print(performance_results)
+
+# Graphiques avec gestion d'erreur
+
+if (nrow(performance_results) > 0) {
+  tryCatch({
+    # Graphique principal
+    p1 <- ggplot(performance_results, aes(x = ntrees)) +
+      geom_line(aes(y = accuracy, color = "Accuracy"), size = 1.2) +
+      geom_point(aes(y = accuracy, color = "Accuracy"), size = 2) +
+      scale_color_manual(values = c("Accuracy" = "blue")) +
+      labs(title = "Performance du modele Bagging",
+           x = "Nombre d'arbres",
+           y = "Score",
+           color = "Metrique") +
+      theme_minimal() +
+      ylim(0, 1)
+    
+    print(p1)
+    
+    # Graphique de variance si données disponibles
+    
+    variance_data <- performance_results[!is.na(performance_results$variance) & performance_results$variance > 0, ]
+    if (nrow(variance_data) > 0) {
+      p2 <- ggplot(variance_data, aes(x = ntrees, y = variance)) +
+        geom_line(color = "green", size = 1.2) +
+        geom_point(color = "green", size = 2) +
+        labs(title = "Evolution de la variance",
+             x = "Nombre arbres",
+             y = "Variance moyenne") +
+        theme_minimal()
+      
+      print(p2)
+    }
+    
+  }, error = function(e) {
+    cat("Erreur lors de la création des graphiques:", e$message, "\n")
+  })
+}
+```
+
+**Stabilité de l'accuracy**
+
+Comme le montre le tableau et le graphique "Performance du modèle Bagging", **l'exactitude (accuracy)** du modèle reste constante à **0.836** dès le premier arbre jusqu’à 300 arbres.
+
+* **Explication** : Cela suggère que l'erreur de classification n'est pas très sensible à l'augmentation du nombre d'arbres. Le premier arbre capte déjà l'essentiel de la structure du signal prédictif. Ajouter plus d’arbres n’améliore donc pas directement l’exactitude, mais…
+
+**Réduction progressive de la variance**
+
+Le graphique "Évolution de la variance" montre une **diminution nette de la variance moyenne des prédictions** lorsque le nombre d'arbres augmente.
+
+* **Interprétation** :
+
+  * Pour les petits nombres d’arbres (1 à 10), la variance est encore fluctuante.
+  * À partir d’environ **30 à 50 arbres**, la variance se stabilise autour d’une valeur basse.
+  * **Conclusion** : le bagging remplit son rôle principal — **réduire la variance** des prédictions. Cela confirme l’intérêt du bagging comme technique d’agrégation pour stabiliser les modèles instables comme les arbres de décision.
+
+---
+
+**Conclusion**
+
+L’implémentation du bagging sur notre jeu de données a permis d'améliorer la stabilité des prédictions (réduction de la variance) sans compromettre la performance globale du modèle. Dès les premiers arbres, l’exactitude est élevée et stable, mais le gain en robustesse devient visible à partir de 30 arbres. Le bagging permet ainsi d’atténuer les fluctuations propres aux arbres de décision tout en consolidant la capacité discriminante du modèle, comme l’indique la progression de l’AUC.
+
+
+### **Graphique des variables importances (Bagging)**
+
+```{r}
+var_importance_list <- lapply(bagg_cart, function(tree) {
+  if (!is.null(tree$variable.importance)) {
+    importance_df <- data.frame(
+      variable = names(tree$variable.importance),
+      importance = tree$variable.importance
+    )
+    return(importance_df)
+  } else {
+    return(NULL)
+  }
+})
+
+var_importance_list <- var_importance_list[!sapply(var_importance_list, is.null)]
+
+var_importance_combined <- do.call(rbind, var_importance_list)
+
+var_importance_avg <- aggregate(importance ~ variable, data = var_importance_combined, FUN = mean)
+
+var_importance_avg <- var_importance_avg[order(-var_importance_avg$importance), ]
+
+# Créer le graphique d'importance des variables
+
+ggplot(var_importance_avg, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "#8E44AD") +
+  coord_flip() +
+  labs(title = "Importance des variables dans le modele de bagging",
+       x = "Variable",
+       y = "Importance relative moyenne") +
+  theme_minimal()
+
+```
+
+Le graphique montre que, comme dans l'arbre de décision, les variables **AnnualIncome** et **EverTravelledAbroad** sont les plus influentes dans le modèle de bagging, suivies de **Age**. Les autres variables ont un impact négligeable sur la prédiction.
+
+### **Graphique de dépendance des variables : Variables continue (Bagging)**
+
+```{r}
+# Fonction simplifiée pour PDP bagging
+
+
+# 2. Partial Dependence Plots
+
+# Fonction pour calculer le PDP pour une variable continue
+
+
+pdp_bagging_continuous <- function(models, var_name, data, grid_size = 30) {
+  # Déterminer la plage de valeurs à échantillonner
+  var_min <- min(data[[var_name]], na.rm = TRUE)
+  var_max <- max(data[[var_name]], na.rm = TRUE)
+  grid_points <- seq(var_min, var_max, length.out = grid_size)
+  
+  # Créer le dataframe pour stocker les résultats
+  pdp_result <- data.frame(
+    x = grid_points,
+    y = numeric(length(grid_points))
+  )
+  names(pdp_result)[1] <- var_name
+  
+  # Pour chaque point de la grille
+  for (i in seq_along(grid_points)) {
+    # Créer une copie des données avec la variable fixée
+    temp_data <- data
+    temp_data[[var_name]] <- grid_points[i]
+    
+    # Prédire avec chaque modèle
+    predictions <- lapply(models, function(model) {
+      predict(model, temp_data, type = "prob")[, 2]
+    })
+    
+    # Moyenner les prédictions de tous les modèles
+    avg_pred <- rowMeans(do.call(cbind, predictions))
+    
+    # Stocker le résultat
+    pdp_result$y[i] <- mean(avg_pred)
+  }
+  
+  return(pdp_result)
+}
+
+# Identifier les variables les plus importantes (top 2)
+top_vars <- head(var_importance_avg$variable, 2)
+
+# Identifier les variables continues
+continuous_vars_bagging <- c("Age", "AnnualIncome")
+
+# Créer les PDP pour les variables continues importantes
+
+# Identifier les variables les plus importantes (top 3)
+top_vars <- head(var_importance_avg$variable, 3)
+
+# Identifier les variables continues et catégorielles
+continuous_vars <- c("Age", "AnnualIncome")
+categorical_vars <- c("Employment_Type", "GraduateOrNot", "ChronicDiseases", "FrequentFlyer", "EverTravelledAbroad")
+
+# Créer les PDP pour les variables continues importantes
+for (var in intersect(top_vars, continuous_vars)) {
+  pdp_data <- pdp_bagging_continuous(bagg_cart, var, training_set)
+  
+  p <- ggplot(pdp_data, aes_string(x = var, y = "y"))+
+    geom_smooth(method = "loess", se = TRUE, color = "red", linetype = "dashed", size = 0.8) +
+    theme_minimal() +
+    labs(title = paste("Partial Dependence Plot pour", var, "(Bagging)"),
+         y = "Effet partiel sur la probabilite d'assurance voyage",
+         x = var)
+  
+  print(p)
+}
+
+```
+
+Les courbes de dépendance partielle (PDP) issues du modèle de Bagging confirment le rôle prédictif prépondérant du revenu annuel, avec un effet croissant et net sur la probabilité de souscription. Ce résultat est cohérent avec les observations issues de l'arbre de décision simple.
+
+Contrairement à ce dernier, le modèle Bagging met davantage en évidence l'effet de l'âge : bien que son impact reste modéré, on observe une tendance légèrement croissante à partir de 30 ans. Cette dynamique est mieux capturée grâce à la stabilité accrue apportée par l'agrégation d'arbres dans la méthode de Bagging.
+
+
+### **Graphique de dépendance des variables : Variables catégorielles (Bagging)**
+
+```{r}
+
+pdp_bagging_categorical <- function(models, var_name, data) {
+  # Obtenir les niveaux uniques
+  levels <- sort(unique(data[[var_name]]))
+  
+  # Créer le dataframe pour stocker les résultats
+  pdp_result <- data.frame(
+    x = levels,
+    y = numeric(length(levels))
+  )
+  names(pdp_result)[1] <- var_name
+  
+  # Pour chaque niveau
+  for (i in seq_along(levels)) {
+    # Créer une copie des données avec la variable fixée
+    temp_data <- data
+    temp_data[[var_name]] <- levels[i]
+    
+    # Prédire avec chaque modèle
+    predictions <- lapply(models, function(model) {
+      predict(model, temp_data, type = "prob")[, 2]
+    })
+    
+    # Moyenner les prédictions de tous les modèles
+    avg_pred <- rowMeans(do.call(cbind, predictions))
+    
+    # Stocker le résultat
+    pdp_result$y[i] <- mean(avg_pred)
+  }
+  
+  return(pdp_result)
+}
+
+
+# Créer les PDP pour les variables catégorielles importantes
+
+for (var in intersect(top_vars, categorical_vars)) {
+  pdp_data <- pdp_bagging_categorical(bagg_cart, var, training_set)
+  
+  p <- ggplot(pdp_data, aes_string(x = var, y = "y")) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = paste("Partial Dependence Plot pour", var, "(Bagging)"),
+         y = "Effet partiel sur la probabilite d'assurance voyage",
+         x = var)
+  
+  print(p)
+}
+
+```
+
+La variable EverTravelledAbroad n’apporte pas de gain discriminant significatif dans le modèle bagging, la probabilité prédite reste stable quelle que soit la modalité. Cela reflète un effet marginal ou redondant vis-à-vis d’autres variables plus prédictives.
+
+## **Méthodes d’Ensemble : Random Forest **
+
+### **Construction d'une forest d'arbres**
+
+```{r}
+
+set.seed(123) 
+m0_rf <- randomForest(
+  TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+  data = training_set,
+  ntree = 50,            # Nombre d'arbres dans la forêt
+  nodesize = 5,          # Nombre minimal d'observations dans chaque feuille
+  mtry = 2,              # Nombre de variables tirées à chaque nœud 
+  importance = TRUE,     # Évaluer l'importance des prédicteurs
+  keep.forest = TRUE,    # Conserver la forêt pour les prédictions futures
+  do.trace = TRUE        # Afficher des informations pendant l'apprentissage
+)
+```
+L’évaluation OOB du modèle Random Forest montre une stabilisation de l’erreur globale autour de 21.8 % à partir de 40 arbres, ce qui indique une bonne convergence du modèle. L’erreur est plus faible pour la classe majoritaire, ce qui peut refléter un déséquilibre dans les données ou une prédiction plus aisée des non-souscriptions.
+
+###  **Estimation de la performance en utilisant l'erreur OOB  en fonction de mtry**
+
+```{r}
+
+mtry_values <- c(2, 3, 4, 5, 6, 7)
+oob_mtry_results <- data.frame(
+  mtry = mtry_values,
+  oob_error = numeric(length(mtry_values))
+)
+
+set.seed(24)
+for (i in seq_along(mtry_values)) {
+  cat("Evaluation avec mtry =", mtry_values[i], "\n")
+  
+  # Construction du modèle avec différentes valeurs de mtry
+  rf_model <- randomForest(
+    TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                      GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+    data = training_set,
+    ntree = 100,              # Nombre fixe d'arbres pour l'évaluation
+    nodesize = 5,             # Valeur fixe pour nodesize
+    mtry = mtry_values[i],    # Valeur variable de mtry
+    importance = FALSE,
+    do.trace = FALSE
+  )
+  
+  # Stockage de l'erreur OOB
+  oob_mtry_results$oob_error[i] <- tail(rf_model$err.rate[, "OOB"], 1)
+}
+
+# Affichage des résultats
+print(oob_mtry_results)
+
+# Graphique de l'erreur OOB en fonction de mtry
+ggplot(oob_mtry_results, aes(x = mtry, y = oob_error)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Erreur OOB en fonction de mtry",
+       x = "Nombre de variables a chaque nœud (mtry)",
+       y = "Erreur OOB")
+
+# Identification du meilleur mtry selon l'erreur OOB
+best_mtry_oob <- mtry_values[which.min(oob_mtry_results$oob_error)]
+
+```
+
+
+#### **Interprétation du graphique "Erreur OOB en fonction de mtry**
+
+Ce graphique montre comment **l'erreur Out-Of-Bag (OOB)** varie en fonction du **paramètre `mtry`**, c’est-à-dire le **nombre de variables candidates testées à chaque nœud de split** dans la forêt aléatoire.
+
+* L’**erreur OOB est minimale lorsque `mtry = 2`**, avec une erreur d’environ **21.5 %**.
+* À mesure que `mtry` augmente (jusqu’à 7), l’erreur OOB **augmente régulièrement**, atteignant près de **25 %**.
+* Cela signifie qu’un **nombre trop élevé de variables candidates à chaque division** augmente le risque de **corrélation entre les arbres**, ce qui réduit la **diversité du modèle**.
+
+L’analyse de la variation de l’erreur OOB en fonction du paramètre `mtry` montre que la performance du modèle Random Forest est optimale lorsque `mtry = 2`. Au-delà de cette valeur, l’erreur augmente, ce qui suggère que l’introduction de trop de variables lors de chaque division réduit la capacité du modèle à bénéficier pleinement de la diversité apportée par le bagging. Ainsi, un `mtry` faible favorise une meilleure généralisation du modèle.
+
+Dans la suite, nous allons extraire la valeur optimale de best_mtry_oob, c’est-à-dire le paramètre mtry qui minimise l’erreur OOB. Cette valeur nous servira à déterminer ensuite la taille de nœud (nodesize) la plus adaptée, toujours dans l’objectif de réduire l’erreur OOB.
+
+
+### **Interprétation du graphique Erreur OOB en fonction de nodesize**
+
+```{r}
+
+nodesize_values <- c(1,2, 3,4, 5,6,7,8,9, 10,12,14, 15, 18,20, 30)
+
+oob_nodesize_results <- data.frame(
+  nodesize = nodesize_values,
+  oob_error = numeric(length(nodesize_values))
+)
+
+set.seed(123)
+for (i in seq_along(nodesize_values)) {
+  
+  cat("Evaluation avec nodesize =", nodesize_values[i], "\n")
+  
+  # Construction du modèle avec différentes valeurs de nodesize
+  rf_model <- randomForest(
+    TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                      GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+    data = training_set,
+    ntree = 100,                 # Nombre fixe d'arbres
+    nodesize = nodesize_values[i], # Valeur variable de nodesize
+    mtry = best_mtry_oob,        # Utilisation du meilleur mtry trouvé précédemment
+    importance = FALSE,
+    do.trace = FALSE
+  )
+  
+  # Stockage de l'erreur OOB
+  oob_nodesize_results$oob_error[i] <- tail(rf_model$err.rate[, "OOB"], 1)
+}
+
+# Affichage des résultats
+print(oob_nodesize_results)
+
+# Graphique de l'erreur OOB en fonction de nodesize
+ggplot(oob_nodesize_results, aes(x = nodesize, y = oob_error)) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Erreur OOB en fonction de nodesize",
+       x = "Taille minimale des nœuds terminaux (nodesize)",
+       y = "Erreur OOB")
+
+# Identification du meilleur nodesize selon l'erreur OOB
+best_nodesize_oob <- nodesize_values[which.min(oob_nodesize_results$oob_error)]
+```
+
+---
+
+**Analyse de l’erreur OOB en fonction du paramètre `nodesize`**
+
+Le graphique ci-dessus illustre l’évolution de l’erreur OOB (Out-of-Bag) en fonction de la taille minimale des nœuds terminaux (`nodesize`) dans le modèle de forêt aléatoire. On observe que l’erreur OOB varie de façon non monotone, avec une tendance globale à l’augmentation à partir d’une certaine taille. Les plus faibles erreurs sont obtenues pour des valeurs de `nodesize` comprises entre 1 et 5, suggérant que des feuilles plus petites permettent au modèle de mieux capturer la complexité des données. Au-delà de `nodesize = 10`, l’erreur OOB a tendance à augmenter, indiquant une perte de précision due à une sous-segmentation de l’espace de décision.
+
+Ainsi, une petite valeur de `nodesize`, typiquement autour de **2 à 5**, semble optimale pour ce modèle.
+
+### **Estimation de la performance par validation croisée en fonction de ntrees**
+
+```{r}
+
+ntrees_values <- seq(10, 500, by = 20)
+
+
+# Validation croisée pour l’accuracy
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = defaultSummary
+)
+
+cv_ntrees_results <- data.frame(
+  ntrees = ntrees_values,
+  Accuracy = numeric(length(ntrees_values))
+)
+
+for (i in seq_along(ntrees_values)) {
+  
+  param_grid <- expand.grid(mtry = best_mtry_oob)
+  
+  set.seed(123 + i)
+  cv_model <- train(
+    TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                      GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+    data = training_set,
+    method = "rf",
+    metric = "Accuracy",
+    trControl = ctrl,
+    tuneGrid = param_grid,
+    ntree = ntrees_values[i]
+  )
+  
+  cv_ntrees_results$Accuracy[i] <- cv_model$results$Accuracy
+}
+
+# Affichage
+print(cv_ntrees_results)
+
+# Courbe de l’Accuracy
+ggplot(cv_ntrees_results, aes(x = ntrees, y = Accuracy)) +
+  geom_line(color = "blue") +
+  geom_point(color = "blue") +
+  theme_minimal() +
+  labs(title = "Accuracy en fonction du nombre d'arbres (validation croisee)",
+       x = "Nombre d'arbres (ntree)",
+       y = "Accuracy")
+
+# Meilleur ntree
+
+best_ntrees_cv <- ntrees_values[which.max(cv_ntrees_results$Accuracy)]
+
+
+
+```
+
+**Évolution de l'accuracy en fonction du nombre d'arbres (ntree)**
+
+Le graphique ci-dessus illustre la performance du modèle Random Forest mesurée par l'**accuracy** lors d'une **validation croisée à 5 plis**, en fonction du nombre d'arbres construits (paramètre `ntree`).
+
+On observe une amélioration progressive de l'accuracy jusqu’à environ **200 arbres**, où un pic est atteint avec une précision proche de **0.79**. Au-delà de ce seuil, l’ajout d’arbres supplémentaires n’apporte **pas d’amélioration significative**. L'accuracy fluctue légèrement autour de cette valeur, suggérant que le modèle a atteint une **zone de stabilité**.
+
+Cela indique que **150 arbres suffisent à atteindre une performance optimale**, et qu'augmenter davantage la complexité (ntree > 150) **n’améliore pas la précision**, tout en **augmentant le temps de calcul**.
+
+**Conclusion** : Le nombre optimal d’arbres pour ce modèle est proche de **150**, ce qui permet de concilier performance et efficacité computationnelle.
+
+
+```{r}
+
+library(ranger)
+
+# Définir les grilles d'hyperparamètres
+
+mtry_grid <- c(2, 3, 4, 5, 6, 7)
+nodesize_grid <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 18, 20, 30)
+
+# Configuration de la validation croisée
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  verboseIter = TRUE
+)
+
+# Créer la grille complète avec splitrule (nécessaire pour ranger)
+
+full_grid <- expand.grid(
+  mtry = mtry_grid,
+  splitrule = "gini",  # Requis pour ranger (options: gini, extratrees, hellinger)
+  min.node.size = nodesize_grid
+)
+
+# Exécution de la validation croisée
+
+set.seed(123)
+
+cv_full <- train(
+  TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+  data = training_set,
+  method = "ranger",  # Utilisation de ranger pour ajuster min.node.size
+  num.trees = best_ntrees_cv,    
+  metric = "ROC",
+  trControl = ctrl,
+  tuneGrid = full_grid,
+  importance = "impurity"  
+)
+
+
+cat("\n Meilleurs hyperparametres selon la validation croisee complete:\n")
+print(cv_full$bestTune)
+
+# Visualisation des résultats
+
+ggplot(cv_full) +
+  theme_minimal() +
+  labs(title = "Performance du modele en fonction des hyperparametres",
+       x = "Parametres",
+       y = "AUC ROC")
+
+# Graphique spécifique pour mieux visualiser les interactions
+cv_results <- cv_full$results
+
+# Trouver la meilleure règle de division (splitrule)
+best_splitrule <- cv_full$bestTune$splitrule
+
+# Filtrer les résultats pour la meilleure règle de division
+
+filtered_results <- cv_results[cv_results$splitrule == best_splitrule, ]
+
+# Créer la heatmap
+ggplot(filtered_results, aes(x = as.factor(mtry), y = as.factor(min.node.size), fill = ROC)) +
+  geom_tile() +
+  geom_text(aes(label = round(ROC, 3)), color = "white", size = 2.5) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_minimal() +
+  labs(title = paste("Performance (AUC) pour differentes combinaisons d'hyperparametres\n(splitrule =", best_splitrule, ")"),
+       x = "mtry",
+       y = "nodesize",
+       fill = "AUC ROC")
+
+# Création d'un graphique de ligne pour visualiser l'effet de mtry pour différents nodesize
+ggplot(filtered_results, aes(x = mtry, y = ROC, color = as.factor(min.node.size), group = as.factor(min.node.size))) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = paste("Effet de mtry et nodesize sur l'AUC (splitrule =", best_splitrule, ")"),
+       x = "mtry",
+       y = "AUC ROC",
+       color = "nodesize")
+
+# Création d'un graphique de ligne pour visualiser l'effet de nodesize pour différents mtry
+ggplot(filtered_results, aes(x = min.node.size, y = ROC, color = as.factor(mtry), group = as.factor(mtry))) +
+  geom_line() +
+  geom_point() +
+  theme_minimal() +
+  labs(title = paste("Effet de nodesize et mtry sur l'AUC (splitrule =", best_splitrule, ")"),
+       x = "nodesize",
+       y = "AUC ROC",
+       color = "mtry")
+
+
+```
+
+**Graphique 1 : Performance en fonction des hyperparamètres (`nodesize` fixé)**
+
+Ce graphique montre l’évolution de l’AUC en fonction du nombre d’arbres (`ntree` ou `paramètres`) pour différentes valeurs de `mtry` (nombre de variables candidates par split).
+
+* **Observation clé** : Lorsque `mtry = 2`, la performance (AUC) est systématiquement meilleure que pour les autres valeurs de `mtry`, surtout à partir de 100 arbres.
+* **Interprétation** : Un faible `mtry` augmente la diversité entre les arbres, ce qui améliore la performance globale du modèle via un meilleur effet de bagging.
+
+---
+
+**Graphique 2 : Effet croisé de `mtry` et `nodesize` sur l’AUC**
+
+Ce graphique explore l’impact combiné de `mtry` (axe x) et `nodesize` sur l’AUC.
+
+* **Observation clé** : Plus `mtry` augmente, plus l’AUC a tendance à décroître, surtout pour les `nodesize` faibles.
+
+* **Interprétation** : Une valeur élevée de `mtry` diminue la variance entre les arbres, ce qui réduit la capacité de généralisation du modèle. Cela confirme que **trop d'information à chaque split nuit à la performance**.
+
+---
+
+**Graphique 3 : Effet croisé de `nodesize` et `mtry` sur l’AUC**
+
+Cette fois, l’axe des x est `nodesize` (taille minimale des feuilles), avec une couleur par valeur de `mtry`.
+
+* **Observation clé** : À `mtry = 2`, la performance augmente avec `nodesize`, atteignant un maximum vers 30.
+* **Interprétation** : Cela suggère que pour un `mtry` faible (donc des splits très variés), augmenter `nodesize` permet de lisser les arbres, évitant l’overfitting. En revanche, pour des `mtry` plus élevés, l’impact est moins clair.
+
+---
+
+Ces trois graphiques démontrent l'importance de l'interaction entre les hyperparamètres `mtry` et `nodesize`. La meilleure performance est obtenue avec `mtry = 2` et un `nodesize` autour de 20–30, ce qui confirme que **plus de diversité entre les arbres combiné à une régularisation des feuilles terminales** favorise la généralisation du modèle Random Forest.
+
+
+
+
+### **Reconstruction du modele final avec les meilleurs hyperparametres de la cross validation**
+
+
+```{r}
+
+final_mtry <- cv_full$bestTune$mtry
+final_nodesize <- cv_full$bestTune$min.node.size
+final_ntrees <- best_ntrees_cv
+
+set.seed(123)
+final_rf <- randomForest(
+  TravelInsurance ~ Age + AnnualIncome + Employment_Type + 
+                    GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+  data = training_set,
+  ntree = final_ntrees,
+  nodesize = final_nodesize,
+  mtry = final_mtry,
+  importance = TRUE,
+  keep.forest = TRUE,
+  do.trace = TRUE
+)
+
+print(final_rf)
+
+cat("\nErreur OOB finale:", tail(final_rf$err.rate[, "OOB"], 1), "\n")
+
+```
+### **Importance des variables** : 
+
+```{r}
+
+var_importance <- final_rf$importance
+importance_df <- data.frame(
+  Variable = rownames(var_importance),
+  Importance = var_importance[, "MeanDecreaseGini"]
+)
+
+importance_df <- importance_df %>%
+  arrange(Importance)
+
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "darkblue", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Importance des variables dans le modele Random Forest",
+    x = "Variables",
+    y = "Importance (Mean Decrease Gini)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10)
+  )
+
+
+```
+
+Nous obtenons des résultats similaires concernant les variables clés avec les modèles d'arbres de décision. La variable la plus significative est le revenu, suivie de près par la variable EverTravelledAbroad, puis par l'âge.
+
+### **Diagrammes de dependance partielle des variables **
+
+```{r}
+
+create_pdp_continuous_ggplot <- function(model, data, variable) {
+
+  min_val <- min(data[[variable]], na.rm = TRUE)
+  max_val <- max(data[[variable]], na.rm = TRUE)
+  
+  grid_size <- 50
+  grid_values <- seq(min_val, max_val, length.out = grid_size)
+  
+  predictions <- numeric(grid_size)
+  
+  for (i in seq_along(grid_values)) {
+  
+    temp_data <- data
+    
+    temp_data[[variable]] <- grid_values[i]
+    
+    preds <- predict(model, temp_data, type = "prob")
+    
+    predictions[i] <- mean(preds[, "Yes"], na.rm = TRUE)
+  }
+  
+  pdp_df <- data.frame(
+    x = grid_values,
+    y = predictions
+  )
+  names(pdp_df) <- c(variable, "probability")
+  
+  # Créer le graphique avec ggplot2
+  
+  p <- ggplot(pdp_df, aes_string(x = variable, y = "probability")) +
+    geom_smooth(method = "loess", se = TRUE, color = "red", linetype = "dashed", alpha = 0.3) +
+    theme_minimal() +
+    labs(title = paste("Dependance partielle : ", variable),
+         x = variable,
+         y = "Probabilite moyenne de 'Oui'") +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          axis.title = element_text(face = "bold"))
+  
+  return(list(plot = p, data = pdp_df))
+}
+
+
+# Identifier les variables continues et catégorielles
+continuous_vars <- intersect(top_vars, c("Age", "AnnualIncome"))
+
+pdp_plots <- list()
+
+# Créer les graphiques pour les variables continues
+
+for (var in continuous_vars) {
+  tryCatch({
+    result <- create_pdp_continuous_ggplot(final_rf, training_set, var)
+    pdp_plots[[var]] <- result$plot
+  })
+}
+
+
+# Afficher les graphiques individuellement
+for (var in names(pdp_plots)) {
+  print(pdp_plots[[var]])
+}
+```
+ **1. AnnualIncome – Probabilité d’assurance voyage**
+
+**Graphique** : `Partial Dependence Plot` pour la variable continue `AnnualIncome`.
+
+**Interprétation** :
+On observe une nette relation positive entre le revenu annuel et la probabilité de souscription à une assurance voyage.
+
+* En dessous de **1 million**, la probabilité reste faible (environ 10-15 %).
+* À partir d’environ **1,2 million**, la probabilité augmente rapidement jusqu’à dépasser **60 %** au-delà de **1,5 million**.
+
+**Conclusion** : Le revenu annuel est un facteur déterminant. Plus l’individu a un revenu élevé, plus il est susceptible de souscrire à l’assurance voyage.
+
+
+**2. Age – Probabilité d’assurance voyage**
+
+**Graphique** : `Partial Dependence Plot` pour la variable `Age`.
+
+**Interprétation** :
+
+* Pour les personnes âgées de **25 à 28 ans**, la probabilité de souscription est relativement faible (environ 17-20 %).
+* Cette probabilité commence à croître à partir de **30 ans** et atteint plus de **35 %** au-delà de **33 ans**.
+
+**Conclusion** : Le modèle détecte une influence positive de l’âge sur la propension à souscrire, surtout à partir de la trentaine.
+
+
+## **Méthodes d’Ensemble : Gradient Boosting **
+
+
+Cette méthode repose sur l'utilisation d'une **fonction de lien**, en l'occurrence la **fonction logit**, définie par :
+
+$$
+f(x) = \frac{x}{1 - x}, \quad \text{avec } x \in [0, 1]
+$$
+Cette fonction est adaptée ici car la problématique relève d’un cas de **classification binaire**, analogue à l’estimation du **nombre d’occurrences de sinistres** en actuariat.
+
+Dans le modèle, la **distribution binomiale** est spécifiée pour refléter la nature binaire de la variable cible, et pour assurer la cohérence avec la fonction de lien logit. Ce choix permet d’exploiter la correspondance naturelle entre la distribution binomiale et le lien logit dans le cadre des modèles linéaires généralisés (GLM).
+
+Le code suivant en donne une implémentation sous **R** :
+
+
+```{r}
+training_set$TravelInsurance_num <- ifelse(training_set$TravelInsurance == "Yes", 1, 0)
+testing_set$TravelInsurance_num <- ifelse(testing_set$TravelInsurance == "Yes", 1, 0)
+
+categorical_vars <- c("Employment_Type", "GraduateOrNot", "ChronicDiseases", "FrequentFlyer", "EverTravelledAbroad")
+for (var in categorical_vars) {
+  training_set[[var]] <- as.factor(training_set[[var]])
+  testing_set[[var]] <- as.factor(testing_set[[var]])
+}
+
+gbm_initial <- gbm(TravelInsurance_num ~ Age + AnnualIncome + Employment_Type + 
+                     GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+                   data = training_set,
+                   distribution = "bernoulli",  # Distribution bernoulli avec lien logit
+                   n.trees = 100,              # Nombre initial d'arbres
+                   interaction.depth = 3,      # Profondeur d'interaction initiale
+                   shrinkage = 0.1,            # Shrinkage initial
+                   bag.fraction = 0.5,         # Fraction d'observations utilisées
+                   cv.folds = 5,               # Validation croisée à 5 plis
+                   train.fraction = 0.8,
+                   verbose = FALSE)
+```
+
+### **Estimation de la performance du modèle par validation croisée en fonction des hyperparamètres clés**
+
+```{r}
+
+
+# Définition des grilles d'hyperparamètres à tester
+
+n_trees_grid <- c(10,20,30,50,60,70,80,90,100,150,180, 200, 230,270,300, 500)
+
+interaction_depth_grid <- c(2, 3, 5, 7)
+
+bag_fraction_grid <- c(0.5, 0.7, 0.9)
+
+shrinkage_grid <- c(0.01,0.02,0.03,0.04, 0.05, 0.1, 0.2,0.3,0.5)
+
+# Initialisation d'un dataframe pour stocker les résultats
+results <- data.frame()
+
+for (n_trees in n_trees_grid) {
+  for (interaction_depth in interaction_depth_grid) {
+    cat("  Test avec n_trees =", n_trees, "et interaction_depth =", interaction_depth, "\n")
+    
+    set.seed(123)
+    cv_model <- gbm(TravelInsurance_num ~ Age + AnnualIncome + Employment_Type + 
+                      GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+                    data = training_set,
+                    distribution = "bernoulli",
+                    n.trees = n_trees,
+                    interaction.depth = interaction_depth,
+                    shrinkage = 0.1,  # Valeur fixe pour cette étape
+                    bag.fraction = 0.5,  # Valeur fixe pour cette étape
+                    cv.folds = 5,
+                    train.fraction = 0.8,
+                    verbose = FALSE)
+    
+    # Trouver le nombre optimal d'arbres
+    best_iter <- gbm.perf(cv_model, method = "cv", plot.it = FALSE)
+    cv_error <- cv_model$cv.error[best_iter]
+    
+    # Stocker les résultats
+    results <- rbind(results, data.frame(
+      n_trees = n_trees,
+      interaction_depth = interaction_depth,
+      bag_fraction = 0.5,
+      shrinkage = 0.1,
+      best_iter = best_iter,
+      cv_error = cv_error
+    ))
+  }
+}
+
+# Trouver les meilleurs paramètres de cette première étape
+
+best_params_1 <- results[which.min(results$cv_error), ]
+
+cat("\nMeilleurs paramètres (étape 1):\n")
+print(best_params_1)
+
+# 2. Ensuite, avec les meilleurs n_trees et interaction_depth, optimiser bag_fraction et shrinkage
+cat("\n2. Optimisation de bag_fraction et shrinkage...\n")
+results_2 <- data.frame()
+
+for (bag_fraction in bag_fraction_grid) {
+  for (shrinkage in shrinkage_grid) {
+    cat("  Test avec bag_fraction =", bag_fraction, "et shrinkage =", shrinkage, "\n")
+    
+    set.seed(42)
+    cv_model <- gbm(TravelInsurance_num ~ Age + AnnualIncome + Employment_Type + 
+                      GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+                    data = training_set,
+                    distribution = "bernoulli",
+                    n.trees = best_params_1$n_trees,
+                    interaction.depth = best_params_1$interaction_depth,
+                    shrinkage = shrinkage,
+                    bag.fraction = bag_fraction,
+                    cv.folds = 5,
+                    train.fraction = 0.8,
+                    verbose = TRUE)
+    
+    # Trouver le nombre optimal d'arbres
+    best_iter <- gbm.perf(cv_model, method = "cv", plot.it = FALSE)
+    cv_error <- cv_model$cv.error[best_iter]
+    
+    # Stocker les résultats
+    results_2 <- rbind(results_2, data.frame(
+      n_trees = best_params_1$n_trees,
+      interaction_depth = best_params_1$interaction_depth,
+      bag_fraction = bag_fraction,
+      shrinkage = shrinkage,
+      best_iter = best_iter,
+      cv_error = cv_error
+    ))
+  }
+}
+
+# Trouver les meilleurs paramètres de la deuxième étape
+best_params_2 <- results_2[which.min(results_2$cv_error), ]
+cat("\nMeilleurs paramètres (étape 2):\n")
+print(best_params_2)
+
+# 3. Enfin, avec tous les paramètres optimisés, faire une dernière validation avec plus d'arbres
+cat("\n3. Validation finale avec tous les paramètres optimisés...\n")
+
+# Ajuster le nombre maximum d'arbres en fonction du shrinkage (taux d'apprentissage)
+# Avec un taux d'apprentissage plus faible, nous avons besoin de plus d'arbres
+
+final_n_trees <- ifelse(best_params_2$shrinkage <= 0.05, 1000, 
+                        ifelse(best_params_2$shrinkage <= 0.1, 500, 300))
+
+set.seed(123)
+final_model <- gbm(TravelInsurance_num ~ Age + AnnualIncome + Employment_Type + 
+                     GraduateOrNot + ChronicDiseases + FrequentFlyer + EverTravelledAbroad,
+                   data = training_set,
+                   distribution = "bernoulli",
+                   n.trees = final_n_trees,
+                   interaction.depth = best_params_2$interaction_depth,
+                   shrinkage = best_params_2$shrinkage,
+                   bag.fraction = best_params_2$bag_fraction,
+                   cv.folds = 5,
+                   train.fraction = 0.8,
+                   verbose = TRUE)
+
+# Trouver le nombre optimal d'arbres
+
+best_iter_final <- which.min(final_model$cv.error)
+
+cat("\nMeilleur nombre d'arbres pour le modele final:", best_iter_final, "\n")
+
+cat("Erreur de validation croisee finale:", final_model$cv.error[best_iter_final], "\n")
+
+
+# Visualisation de l'erreur de validation croisée en fonction du nombre d'arbres
+ggplot(data.frame(
+  n_trees = 1:length(final_model$cv.error),
+  cv_error = final_model$cv.error
+), aes(x = n_trees, y = cv_error)) +
+  geom_line() +
+  geom_vline(xintercept = best_iter_final, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Erreur de validation croisee en fonction du nombre d'arbres",
+       x = "Nombre d'arbres",
+       y = "Erreur de validation croisee",
+       subtitle = paste("Meilleur nombre d'arbres:", best_iter_final))
+
+
+```
+
+### **Importance des variables**
+
+
+```{r}
+# Extraire l'importance des variables
+var_importance <- summary(final_model, n.trees = best_iter_final, plotit = FALSE)
+
+# S'assurer que la structure est correcte
+if (is.data.frame(var_importance)) {
+  names(var_importance) <- c("variable", "relative_influence")
+  var_imp_df <- var_importance
+} else if (!is.null(names(var_importance))) {
+  var_imp_df <- data.frame(
+    variable = names(var_importance),
+    relative_influence = as.numeric(var_importance)
+  )
+} else {
+  var_imp_df <- data.frame(
+    variable = paste0("var", seq_along(var_importance)),
+    relative_influence = var_importance
+  )
+}
+
+# Vérifier qu'on a bien des données
+if (nrow(var_imp_df) == 0) {
+  var_names <- final_model$var.names
+  var_influence <- relative.influence(final_model, n.trees = best_iter_final)
+  var_imp_df <- data.frame(
+    variable = var_names,
+    relative_influence = var_influence
+  )
+}
+
+# Trier par influence décroissante
+var_imp_df <- var_imp_df[order(-var_imp_df$relative_influence), ]
+
+# Tracer l’importance des variables
+
+ggplot(var_imp_df, aes(x = reorder(variable, relative_influence), y = relative_influence)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Importance des variables dans le modele GBM",
+       subtitle = paste("Base sur", best_iter_final, "arbres"),
+       x = "Variable",
+       y = "Influence relative (%)")
+
+```
+
+Nous obtenons des résultats similaires concernant les variables les modeles precedents. La variable la plus significative est le revenu, suivie de près par l'age, puis par la variable EverTravelledAbroad.
+
+### **Diagrammes de dependance partielle des variables **
+
+```{r}
+
+create_pdp_gbm <- function(model, data, variable, best_iter, class_label = "Yes", grid_size = 50) {
+  
+  grid_vals <- seq(min(data[[variable]], na.rm = TRUE),
+                   max(data[[variable]], na.rm = TRUE),
+                   length.out = grid_size)
+  
+  # Vecteur pour stocker les probabilités moyennes
+  prob_means <- numeric(length(grid_vals))
+  
+  for (i in seq_along(grid_vals)) {
+    # Copier les données
+    temp_data <- data
+    
+    # Fixer la variable à la valeur courante
+    temp_data[[variable]] <- grid_vals[i]
+    
+    # Prédire les probabilités
+    preds <- predict(model, newdata = temp_data, n.trees = best_iter, type = "response")
+    
+    # Cas binaire : preds donne déjà la proba de la classe positive
+    prob_means[i] <- mean(preds, na.rm = TRUE)
+  }
+  
+  pdp_df <- data.frame(
+    variable_value = grid_vals,
+    mean_probability = prob_means
+  )
+  
+  # Tracer avec ggplot2
+  p <- ggplot(pdp_df, aes(x = variable_value, y = mean_probability)) +
+    geom_smooth(method = "loess", se = TRUE, color = "purple", linetype = "dashed", alpha = 0.3) +
+    theme_minimal() +
+    labs(title = paste("Partial Dependence Plot pour", variable, "(GBM)"),
+         x = variable,
+         y = paste("Probabilite moyenne de", shQuote(class_label))) +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+          axis.title = element_text(face = "bold"))
+  
+  return(p)
+}
+
+
+plot1 <- create_pdp_gbm(final_model, training_set, "AnnualIncome", best_iter)
+plot2 <- create_pdp_gbm(final_model, training_set, "Age", best_iter)
+
+
+print(plot1)
+print(plot2)
+
+
+
+```
+
+**AnnualIncome :**
+
+* La probabilité de souscription à l’assurance voyage reste faible et stable pour des revenus < **1 200 000**.
+* Elle **augmente fortement** au-delà de ce seuil, jusqu’à atteindre un plateau autour de **1 600 000**.
+* **Interprétation** : un revenu plus élevé est un facteur déterminant : les clients à revenu élevé sont nettement plus enclins à souscrire.
+
+
+**Age :**
+
+* La probabilité de souscription est minimale autour de **30 ans**, puis **augmente progressivement** après cet âge.
+
+* **Interprétation** : les clients plus âgés (au-delà de 32 ans) semblent accorder plus d’intérêt à l’assurance voyage, peut-être par prudence ou habitudes d'achat différentes.
+
+
+Pour ce qui des interactions, le modèle de Gradient Boosting (GBM) est particulièrement performant pour modéliser des effets non linéaires ainsi que des interactions complexes entre variables. Ces interactions ne sont pas spécifiées explicitement, mais elles émergent naturellement à travers la construction séquentielle d’arbres.
+
+# **Comparaison des modeles**
+
+```{r}
+
+set.seed(123)
+
+# Renommer proprement les colonnes si nécessaire
+colnames(base) <- make.names(colnames(base), unique = TRUE)
+names(base)[names(base) == "Employment.Type"] <- "Employment_Type"
+
+# Séparation en train/test
+in_training <- createDataPartition(y = base$TravelInsurance, p = 0.8, list = FALSE)
+training_set <- base[in_training, ]
+testing_set  <- base[-in_training, ]
+
+# Encodage binaire
+training_set$TravelInsurance <- factor(training_set$TravelInsurance, levels = c("No", "Yes"))
+testing_set$TravelInsurance  <- factor(testing_set$TravelInsurance, levels = c("No", "Yes"))
+
+# ================================================================
+# 1. ARBRE ÉLAGUÉ OPTIMAL
+# ================================================================
+
+best_cp <- cv_model$bestTune$cp
+cv_accuracy_tree <- max(cv_model$results$Accuracy, na.rm = TRUE)
+cv_error_tree <- 1 - cv_accuracy_tree
+
+pred_tree_test <- predict(arbre_optimal, testing_set, type = "class")
+pred_tree_prob <- predict(arbre_optimal, testing_set, type = "prob")[, "Yes"]
+
+accuracy_tree <- mean(pred_tree_test == testing_set$TravelInsurance)
+roc_tree <- pROC::roc(testing_set$TravelInsurance, pred_tree_prob, quiet = TRUE)
+auc_tree <- pROC::auc(roc_tree)
+
+# ================================================================
+# 2. MODÈLE BAGGING
+# ================================================================
+
+# Fonction de prédiction bagging
+predict_bagging <- function(models, newdata) {
+  probs <- sapply(models, function(model) {
+    predict(model, newdata, type = "prob")[, "Yes"]
+  })
+  avg_prob <- rowMeans(probs, na.rm = TRUE)
+  pred_class <- factor(ifelse(avg_prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
+  list(class = pred_class, prob = avg_prob)
+}
+
+# Erreur OOB
+oob_errors <- sapply(bagg_cart, function(model) {
+  pred_train <- predict(model, training_set, type = "class")
+  mean(pred_train != training_set$TravelInsurance)
+})
+cv_error_bagging <- mean(oob_errors)
+cv_accuracy_bagging <- 1 - cv_error_bagging
+
+# Prédictions
+pred_bagging <- predict_bagging(bagg_cart, testing_set)
+accuracy_bagging <- mean(pred_bagging$class == testing_set$TravelInsurance)
+roc_bagging <- roc(testing_set$TravelInsurance, pred_bagging$prob, quiet = TRUE)
+auc_bagging <- auc(roc_bagging)
+
+
+# ================================================================
+# 3. RANDOM FOREST
+# ================================================================
+
+cv_error_rf <- tail(final_rf$err.rate[, "OOB"], 1)
+cv_accuracy_rf <- 1 - cv_error_rf
+
+pred_rf_test <- predict(final_rf, testing_set, type = "class")
+pred_rf_prob <- predict(final_rf, testing_set, type = "prob")[, "Yes"]
+
+accuracy_rf <- mean(pred_rf_test == testing_set$TravelInsurance)
+roc_rf <- roc(testing_set$TravelInsurance, pred_rf_prob, quiet = TRUE)
+auc_rf <- auc(roc_rf)
+
+# ================================================================
+# 4. GRADIENT BOOSTING
+# ================================================================
+
+# Préparer les données
+training_set$TravelInsurance_num <- ifelse(training_set$TravelInsurance == "Yes", 1, 0)
+testing_set$TravelInsurance_num  <- ifelse(testing_set$TravelInsurance == "Yes", 1, 0)
+
+# Facteurs pour gbm
+cat_vars <- c("Employment_Type", "GraduateOrNot", "ChronicDiseases", "FrequentFlyer", "EverTravelledAbroad")
+training_set[cat_vars] <- lapply(training_set[cat_vars], factor)
+testing_set[cat_vars]  <- lapply(testing_set[cat_vars], factor)
+
+cv_error_gbm <- final_model$cv.error[best_iter_final]
+cv_accuracy_gbm <- 1 - cv_error_gbm
+
+pred_gbm_prob <- predict(final_model, testing_set, n.trees = best_iter_final, type = "response")
+pred_gbm_test <- factor(ifelse(pred_gbm_prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
+
+accuracy_gbm <- mean(pred_gbm_test == testing_set$TravelInsurance)
+roc_gbm <- roc(testing_set$TravelInsurance, pred_gbm_prob, quiet = TRUE)
+auc_gbm <- auc(roc_gbm)
+
+
+# ================================================================
+# TABLEAU COMPARATIF FINAL
+# ================================================================
+
+# === Tableau de performance : uniquement AUC et Test Accuracy ===
+
+performance_comparative <- data.frame(
+  Modele = c("Arbre Elague", "Bagging", "Random Forest", "Gradient Boosting"),
+  Test_Accuracy = c(accuracy_tree, accuracy_bagging, accuracy_rf, accuracy_gbm),
+  Test_AUC = c(auc_tree, auc_bagging, auc_rf, auc_gbm)
+)
+
+# === Réorganisation pour affichage dans ggplot ===
+
+perf_melted <- melt(performance_comparative,
+                    id.vars = "Modele",
+                    variable.name = "Metrique",
+                    value.name = "Valeur")
+
+perf_melted$Metrique <- factor(perf_melted$Metrique,
+                               levels = c("Test_Accuracy", "Test_AUC"),
+                               labels = c("Accuracy (Test)", "AUC (Test)"))
+
+# === Graphique combiné Accuracy & AUC ===
+
+ggplot(perf_melted, aes(x = reorder(Modele, -Valeur), y = Valeur, fill = Metrique)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(aes(label = round(Valeur, 3)), position = position_dodge(0.7), 
+            vjust = -0.4, size = 3.2) +
+  labs(title = "Comparaison des Performances des Modeles",
+       subtitle = "Sur l'echantillon test uniquement",
+       x = "Modele", y = "Valeur") +
+  scale_fill_manual(values = c("Accuracy (Test)" = "#00AFBB", "AUC (Test)" = "#E7B800")) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold"))
+
+```
+
+
+**Comparaison des performances et choix du meilleur modèle**
+
+Afin d'identifier le modèle le plus performant pour prédire la souscription à une assurance voyage, nous avons comparé quatre approches supervisées : **Gradient Boosting**, **Bagging**, **Random Forest** et **Arbre élagué**. Les performances ont été évaluées sur l'échantillon test selon deux métriques complémentaires :
+
+* **Accuracy (précision globale)**
+* **AUC (Area Under the ROC Curve)**, qui mesure la capacité de classement du modèle.
+
+**Analyse comparative**
+
+* Tous les modèles atteignent une **précision test très proche**, ce qui indique une bonne performance globale dans la classification binaire.
+* La **meilleure performance globale** est généralement obtenue par les **méthodes ensemblistes** (Bagging, Random Forest, Gradient Boosting), qui surpassent l'arbre de décision simple.
+* Le **Random Forest** et le **Gradient Boosting** montrent des performances particulièrement compétitives, confirmant l'intérêt des méthodes d'ensemble pour ce type de problématique actuarielle.
+* Le modèle **Arbre élagué**, bien que plus interprétable, présente une performance légèrement inférieure, ce qui justifie l'utilisation des méthodes ensemblistes pour améliorer la capacité prédictive.
+
+## **Synthèse des résultats**
+
+L'**analyse exploratoire** des données a révélé que le **revenu annuel** (`AnnualIncome`) et l'**expérience de voyage à l'étranger** (`EverTravelledAbroad`) constituent les variables les plus discriminantes pour prédire la souscription. Ces observations ont été confirmées par tous les modèles testés.
+
+Concernant les **performances comparatives** :
+
+* Les **méthodes ensemblistes** (Bagging, Random Forest, Gradient Boosting) surpassent systématiquement l'arbre de décision simple, confirmant l'intérêt de l'agrégation de modèles pour améliorer la robustesse et la généralisation.
+
+* L'**arbre de décision élagué**, bien que moins performant, présente l'avantage d'une **interprétabilité maximale** en se concentrant uniquement sur le revenu annuel comme critère de segmentation principal.
+
+* Le **Random Forest** et le **Gradient Boosting** offrent les meilleures performances globales, avec une capacité accrue à capturer les interactions complexes entre variables.
+
+## **Implications actuarielles**
+
+Du point de vue actuariel, ces résultats suggèrent que :
+
+1. **Le profil socio-économique** (revenu) est le facteur déterminant dans la décision de souscription, permettant une **segmentation claire de la clientèle**.
+
+2. **L'expérience de voyage** constitue un indicateur comportemental pertinent pour affiner le ciblage marketing.
+
+3. La **simplicité de l'arbre de décision** (basé principalement sur le revenu) offre un outil de communication efficace avec les équipes commerciales et marketing.
+
+## **Perspectives d'amélioration**
+
+Plusieurs axes d'amélioration pourraient être explorés :
+
+* **Enrichissement des données** : intégration de variables comportementales supplémentaires (historique d'achat, données de navigation web, saisonnalité des voyages).
+* **Techniques avancées** : test de méthodes plus récentes (XGBoost, LightGBM, réseaux de neurones).
+* **Optimisation métier** : calibrage des seuils de décision en fonction des objectifs business (optimisation du profit vs volume, coût d'acquisition client).
+
+## **Conclusion**
+
+Ce travail illustre l'efficacité des méthodes d'ensemble en actuariat et fournit une base solide pour le développement d'outils d'aide à la décision en assurance voyage. La convergence des résultats entre les différents modèles concernant l'importance du revenu annuel renforce la robustesse des conclusions et offre une direction claire pour les stratégies de ciblage commercial.
